@@ -12,6 +12,7 @@ from services.config import config
 from services.storage.base import StorageBackend
 
 AuthRole = Literal["admin", "user"]
+UNLIMITED_GENERATION_LIMIT = -1
 
 
 def _now_iso() -> str:
@@ -37,6 +38,23 @@ class AuthService:
     def _default_name(role: object) -> str:
         return "管理员密钥" if str(role or "").strip().lower() == "admin" else "普通用户"
 
+    @staticmethod
+    def _normalize_generation_limit(value: object) -> int:
+        try:
+            limit = int(value)
+        except (OverflowError, TypeError, ValueError):
+            return UNLIMITED_GENERATION_LIMIT
+        if limit < 0:
+            return UNLIMITED_GENERATION_LIMIT
+        return limit
+
+    @staticmethod
+    def _normalize_generation_used(value: object) -> int:
+        try:
+            return max(0, int(value))
+        except (OverflowError, TypeError, ValueError):
+            return 0
+
     def _normalize_item(self, raw: object) -> dict[str, object] | None:
         if not isinstance(raw, dict):
             return None
@@ -50,6 +68,8 @@ class AuthService:
         name = self._clean(raw.get("name")) or self._default_name(role)
         created_at = self._clean(raw.get("created_at")) or _now_iso()
         last_used_at = self._clean(raw.get("last_used_at")) or None
+        generation_limit = self._normalize_generation_limit(raw.get("generation_limit"))
+        generation_used = self._normalize_generation_used(raw.get("generation_used"))
         return {
             "id": item_id,
             "name": name,
@@ -58,6 +78,8 @@ class AuthService:
             "enabled": bool(raw.get("enabled", True)),
             "created_at": created_at,
             "last_used_at": last_used_at,
+            "generation_limit": generation_limit,
+            "generation_used": generation_used,
         }
 
     def _load(self) -> list[dict[str, object]]:
@@ -77,6 +99,9 @@ class AuthService:
 
     @staticmethod
     def _public_item(item: dict[str, object]) -> dict[str, object]:
+        generation_limit = AuthService._normalize_generation_limit(item.get("generation_limit"))
+        generation_used = AuthService._normalize_generation_used(item.get("generation_used"))
+        generation_remaining = None if generation_limit < 0 else max(0, generation_limit - generation_used)
         return {
             "id": item.get("id"),
             "name": item.get("name"),
@@ -84,6 +109,9 @@ class AuthService:
             "enabled": bool(item.get("enabled", True)),
             "created_at": item.get("created_at"),
             "last_used_at": item.get("last_used_at"),
+            "generation_limit": generation_limit,
+            "generation_used": generation_used,
+            "generation_remaining": generation_remaining,
         }
 
     def list_keys(self, role: AuthRole | None = None) -> list[dict[str, object]]:
@@ -147,7 +175,13 @@ class AuthService:
             raise ValueError("这个名称已经在使用中了，换一个更容易区分的名称吧")
         return candidate
 
-    def create_key(self, *, role: AuthRole, name: str = "") -> tuple[dict[str, object], str]:
+    def create_key(
+        self,
+        *,
+        role: AuthRole,
+        name: str = "",
+        generation_limit: int = UNLIMITED_GENERATION_LIMIT,
+    ) -> tuple[dict[str, object], str]:
         with self._lock:
             self._reload_locked()
             normalized_name = self._build_name_locked(name, role=role)
@@ -166,6 +200,8 @@ class AuthService:
                 "enabled": True,
                 "created_at": _now_iso(),
                 "last_used_at": None,
+                "generation_limit": self._normalize_generation_limit(generation_limit),
+                "generation_used": 0,
             }
             self._items.append(item)
             self._save()
@@ -200,6 +236,14 @@ class AuthService:
                     next_item["enabled"] = bool(updates.get("enabled"))
                 if "key" in updates and updates.get("key") is not None:
                     next_item["key_hash"] = self._build_key_hash_locked(str(updates.get("key") or ""), exclude_id=normalized_id)
+                if "generation_limit" in updates and updates.get("generation_limit") is not None:
+                    next_limit = self._normalize_generation_limit(updates.get("generation_limit"))
+                    next_item["generation_limit"] = next_limit
+                    if next_limit >= 0:
+                        next_item["generation_used"] = min(
+                            self._normalize_generation_used(next_item.get("generation_used")),
+                            next_limit,
+                        )
                 self._items[index] = next_item
                 self._save()
                 return self._public_item(next_item)
@@ -246,6 +290,52 @@ class AuthService:
                         self._last_used_flush_at[item_id] = now
                     except Exception:
                         pass
+                return self._public_item(next_item)
+        return None
+
+    def ensure_generation_quota(self, identity: dict[str, object], amount: int = 1) -> None:
+        if identity.get("role") == "admin":
+            return
+        key_id = self._clean(identity.get("id"))
+        if not key_id:
+            raise ValueError("用户密钥不存在或已失效")
+        amount = max(1, int(amount or 1))
+        with self._lock:
+            self._reload_locked()
+            for item in self._items:
+                if item.get("id") != key_id or item.get("role") != "user":
+                    continue
+                if not bool(item.get("enabled", True)):
+                    raise ValueError("用户密钥已被禁用")
+                limit = self._normalize_generation_limit(item.get("generation_limit"))
+                if limit < 0:
+                    return
+                used = self._normalize_generation_used(item.get("generation_used"))
+                if used + amount > limit:
+                    raise ValueError("生成次数已用完，请联系管理员增加次数")
+                return
+        raise ValueError("用户密钥不存在或已失效")
+
+    def consume_generation_quota(self, identity: dict[str, object], amount: int = 1) -> dict[str, object] | None:
+        if identity.get("role") == "admin":
+            return None
+        key_id = self._clean(identity.get("id"))
+        if not key_id:
+            return None
+        amount = max(1, int(amount or 1))
+        with self._lock:
+            self._reload_locked()
+            for index, item in enumerate(self._items):
+                if item.get("id") != key_id or item.get("role") != "user":
+                    continue
+                limit = self._normalize_generation_limit(item.get("generation_limit"))
+                if limit < 0:
+                    return self._public_item(item)
+                used = self._normalize_generation_used(item.get("generation_used"))
+                next_item = dict(item)
+                next_item["generation_used"] = min(limit, used + amount)
+                self._items[index] = next_item
+                self._save()
                 return self._public_item(next_item)
         return None
 

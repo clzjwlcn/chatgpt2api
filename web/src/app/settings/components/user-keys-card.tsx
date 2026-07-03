@@ -35,12 +35,25 @@ function formatDateTime(value?: string | null) {
   }).format(date);
 }
 
+function parseGenerationLimit(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return -1;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return -1;
+  }
+  return Math.max(0, Math.floor(parsed));
+}
+
 export function UserKeysCard() {
   const didLoadRef = useRef(false);
   const [items, setItems] = useState<UserKey[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [name, setName] = useState("");
+  const [generationLimit, setGenerationLimit] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
   const [revealedKey, setRevealedKey] = useState("");
@@ -48,6 +61,7 @@ export function UserKeysCard() {
   const [editingItem, setEditingItem] = useState<UserKey | null>(null);
   const [editName, setEditName] = useState("");
   const [editKey, setEditKey] = useState("");
+  const [editGenerationLimit, setEditGenerationLimit] = useState("");
 
   const load = async () => {
     setIsLoading(true);
@@ -72,10 +86,11 @@ export function UserKeysCard() {
   const handleCreate = async () => {
     setIsCreating(true);
     try {
-      const data = await createUserKey(name.trim());
+      const data = await createUserKey(name.trim(), parseGenerationLimit(generationLimit));
       setItems(data.items);
       setRevealedKey(data.key);
       setName("");
+      setGenerationLimit("");
       setIsDialogOpen(false);
       toast.success("用户密钥已创建");
     } catch (error) {
@@ -132,6 +147,7 @@ export function UserKeysCard() {
     setEditingItem(item);
     setEditName(item.name);
     setEditKey("");
+    setEditGenerationLimit(item.generation_limit < 0 ? "" : String(item.generation_limit));
   };
 
   const handleEdit = async () => {
@@ -141,7 +157,8 @@ export function UserKeysCard() {
     const item = editingItem;
     const trimmedName = editName.trim();
     const trimmedKey = editKey.trim();
-    if (trimmedName === item.name && !trimmedKey) {
+    const nextGenerationLimit = parseGenerationLimit(editGenerationLimit);
+    if (trimmedName === item.name && !trimmedKey && nextGenerationLimit === item.generation_limit) {
       setEditingItem(null);
       return;
     }
@@ -150,16 +167,24 @@ export function UserKeysCard() {
       const data = await updateUserKey(item.id, {
         ...(trimmedName !== item.name ? { name: trimmedName } : {}),
         ...(trimmedKey ? { key: trimmedKey } : {}),
+        ...(nextGenerationLimit !== item.generation_limit ? { generation_limit: nextGenerationLimit } : {}),
       });
       setItems(data.items);
       setEditingItem(null);
       setEditKey("");
-      toast.success(trimmedKey ? "用户密钥已更新" : "用户名称已更新");
+      toast.success("用户密钥已更新");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "更新用户密钥失败");
     } finally {
       setItemPending(item.id, false);
     }
+  };
+
+  const formatGenerationLimit = (item: UserKey) => {
+    if (item.generation_limit < 0) {
+      return `已用 ${item.generation_used} / 不限`;
+    }
+    return `已用 ${item.generation_used} / ${item.generation_limit}，剩余 ${item.generation_remaining ?? 0}`;
   };
 
   const handleCopy = async (value: string) => {
@@ -233,6 +258,7 @@ export function UserKeysCard() {
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
                         <span>创建时间 {formatDateTime(item.created_at)}</span>
                         <span>最近使用 {formatDateTime(item.last_used_at)}</span>
+                        <span>生成次数 {formatGenerationLimit(item)}</span>
                       </div>
                     </div>
 
@@ -298,6 +324,18 @@ export function UserKeysCard() {
               placeholder="例如：设计同学 A、运营临时账号"
               className="h-11 rounded-xl border-stone-200 bg-white"
             />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">生成次数权限</label>
+            <Input
+              type="number"
+              min={0}
+              value={generationLimit}
+              onChange={(event) => setGenerationLimit(event.target.value)}
+              placeholder="留空表示不限次数"
+              className="h-11 rounded-xl border-stone-200 bg-white"
+            />
+            <p className="text-xs leading-5 text-stone-500">填写正整数限制可成功生成的图片次数；留空表示不限次数。</p>
           </div>
           <DialogFooter>
             <Button
@@ -389,6 +427,20 @@ export function UserKeysCard() {
               />
               <p className="text-xs leading-5 text-stone-500">
                 保存后旧密钥会立即失效，新密钥生效。系统仍只保存哈希，不会回显当前密钥。
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">生成次数权限</label>
+              <Input
+                type="number"
+                min={0}
+                value={editGenerationLimit}
+                onChange={(event) => setEditGenerationLimit(event.target.value)}
+                placeholder="留空表示不限次数"
+                className="h-11 rounded-xl border-stone-200 bg-white"
+              />
+              <p className="text-xs leading-5 text-stone-500">
+                当前已用 {editingItem?.generation_used ?? 0} 次；保存更小的上限时，已用次数会被压到新上限。
               </p>
             </div>
           </div>

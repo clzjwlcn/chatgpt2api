@@ -35,6 +35,7 @@ import {
   type ProxyRuntimeEgressMode,
   type ProxyRuntimeSettings,
   type RegisterConfig,
+  type SiteSettings,
   type SettingsConfig,
   type ThirdPartyAppsSettings,
 } from "@/lib/api";
@@ -70,6 +71,18 @@ const DEFAULT_THIRD_PARTY_APPS: ThirdPartyAppsSettings = {
   infinite_canvas: {
     enabled: false,
     url: "https://canvas.best",
+  },
+};
+
+const DEFAULT_SITE: SiteSettings = {
+  name: "chatgpt2api",
+  logo_url: "",
+  github_label: "GitHub",
+  github_url: "https://github.com/basketikun/chatgpt2api",
+  announcement: {
+    enabled: false,
+    title: "公告",
+    content: "",
   },
 };
 
@@ -124,6 +137,24 @@ function normalizeThirdPartyApps(value: unknown): ThirdPartyAppsSettings {
     infinite_canvas: {
       enabled: Boolean(canvas.enabled),
       url: String(canvas.url || DEFAULT_THIRD_PARTY_APPS.infinite_canvas.url),
+    },
+  };
+}
+
+function normalizeSite(value: unknown): SiteSettings {
+  const source = typeof value === "object" && value !== null ? value as Partial<SiteSettings> : {};
+  const announcement = typeof source.announcement === "object" && source.announcement
+    ? source.announcement
+    : {};
+  return {
+    name: String(source.name || DEFAULT_SITE.name).trim() || DEFAULT_SITE.name,
+    logo_url: String(source.logo_url || "").trim(),
+    github_label: String(source.github_label || DEFAULT_SITE.github_label).trim() || DEFAULT_SITE.github_label,
+    github_url: String(source.github_url || DEFAULT_SITE.github_url).trim(),
+    announcement: {
+      enabled: Boolean(announcement.enabled),
+      title: String(announcement.title || DEFAULT_SITE.announcement.title).trim() || DEFAULT_SITE.announcement.title,
+      content: String(announcement.content || "").trim(),
     },
   };
 }
@@ -208,6 +239,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     },
     proxy_runtime: normalizeProxyRuntime(config.proxy_runtime),
     third_party_apps: normalizeThirdPartyApps(config.third_party_apps),
+    site: normalizeSite(config.site),
     backup: {
       ...backup,
       enabled: Boolean(backup.enabled),
@@ -321,6 +353,8 @@ type SettingsStore = {
   setProxyRuntimeClearanceField: <K extends keyof ProxyRuntimeSettings["clearance"]>(key: K, value: ProxyRuntimeSettings["clearance"][K]) => void;
   setProxyRuntimeStatusCodesText: (value: string) => void;
   setInfiniteCanvasField: <K extends keyof ThirdPartyAppsSettings["infinite_canvas"]>(key: K, value: ThirdPartyAppsSettings["infinite_canvas"][K]) => void;
+  setSiteField: <K extends keyof SiteSettings>(key: K, value: SiteSettings[K]) => void;
+  setAnnouncementField: <K extends keyof SiteSettings["announcement"]>(key: K, value: SiteSettings["announcement"][K]) => void;
   testImageStorage: () => Promise<void>;
   syncImagesToWebDAV: () => Promise<void>;
   setBackupField: (key: keyof BackupSettings, value: string | boolean) => void;
@@ -504,6 +538,17 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
             url: String(config.third_party_apps?.infinite_canvas?.url || DEFAULT_THIRD_PARTY_APPS.infinite_canvas.url).trim(),
           },
         },
+        site: {
+          name: String(config.site?.name || DEFAULT_SITE.name).trim() || DEFAULT_SITE.name,
+          logo_url: String(config.site?.logo_url || "").trim(),
+          github_label: String(config.site?.github_label || DEFAULT_SITE.github_label).trim() || DEFAULT_SITE.github_label,
+          github_url: String(config.site?.github_url || DEFAULT_SITE.github_url).trim(),
+          announcement: {
+            enabled: Boolean(config.site?.announcement?.enabled),
+            title: String(config.site?.announcement?.title || DEFAULT_SITE.announcement.title).trim() || DEFAULT_SITE.announcement.title,
+            content: String(config.site?.announcement?.content || "").trim(),
+          },
+        },
         backup: {
           ...(config.backup as BackupSettings),
           account_id: String(config.backup?.account_id || "").trim(),
@@ -520,6 +565,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         config: normalizeConfig(data.config),
       });
       window.dispatchEvent(new Event("third-party-apps-updated"));
+      window.dispatchEvent(new Event("site-settings-updated"));
       toast.success("配置已保存");
       return true;
     } catch (error) {
@@ -738,6 +784,45 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
             ...apps,
             infinite_canvas: {
               ...apps.infinite_canvas,
+              [key]: value,
+            },
+          },
+        },
+      };
+    });
+  },
+
+  setSiteField: (key, value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      const site = normalizeSite(state.config.site);
+      return {
+        config: {
+          ...state.config,
+          site: {
+            ...site,
+            [key]: value,
+          },
+        },
+      };
+    });
+  },
+
+  setAnnouncementField: (key, value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      const site = normalizeSite(state.config.site);
+      return {
+        config: {
+          ...state.config,
+          site: {
+            ...site,
+            announcement: {
+              ...site.announcement,
               [key]: value,
             },
           },

@@ -83,6 +83,18 @@ DEFAULT_THIRD_PARTY_APPS = {
     },
 }
 
+DEFAULT_SITE_SETTINGS = {
+    "name": "chatgpt2api",
+    "logo_url": "",
+    "github_label": "GitHub",
+    "github_url": "https://github.com/basketikun/chatgpt2api",
+    "announcement": {
+        "enabled": False,
+        "title": "公告",
+        "content": "",
+    },
+}
+
 
 def _normalize_bool(value: object, default: bool = False) -> bool:
     if isinstance(value, str):
@@ -284,6 +296,26 @@ def _normalize_third_party_apps_settings(value: object) -> dict[str, object]:
         "infinite_canvas": {
             "enabled": _normalize_bool(canvas_source.get("enabled"), False),
             "url": str(canvas_source.get("url") or DEFAULT_THIRD_PARTY_APPS["infinite_canvas"]["url"]).strip(),
+        },
+    }
+
+
+def _normalize_site_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    announcement_source = source.get("announcement") if isinstance(source.get("announcement"), dict) else {}
+    default_announcement = DEFAULT_SITE_SETTINGS["announcement"]
+    name = str(source.get("name") or DEFAULT_SITE_SETTINGS["name"]).strip()
+    github_url = str(source.get("github_url") or DEFAULT_SITE_SETTINGS["github_url"]).strip()
+    github_label = str(source.get("github_label") or DEFAULT_SITE_SETTINGS["github_label"]).strip()
+    return {
+        "name": name or str(DEFAULT_SITE_SETTINGS["name"]),
+        "logo_url": str(source.get("logo_url") or "").strip(),
+        "github_label": github_label or str(DEFAULT_SITE_SETTINGS["github_label"]),
+        "github_url": github_url,
+        "announcement": {
+            "enabled": _normalize_bool(announcement_source.get("enabled"), False),
+            "title": str(announcement_source.get("title") or default_announcement["title"]).strip() or str(default_announcement["title"]),
+            "content": str(announcement_source.get("content") or "").strip(),
         },
     }
 
@@ -569,6 +601,7 @@ class ConfigStore:
         data["chat_completion_cache"] = self.get_chat_completion_cache_settings()
         data["proxy_runtime"] = self.get_public_proxy_runtime_settings()
         data["third_party_apps"] = self.get_third_party_apps_settings()
+        data["site"] = self.get_site_settings()
         data.pop("auth-key", None)
         return data
 
@@ -593,6 +626,9 @@ class ConfigStore:
     def get_third_party_apps_settings(self) -> dict[str, object]:
         return _normalize_third_party_apps_settings(self.data.get("third_party_apps"))
 
+    def get_site_settings(self) -> dict[str, object]:
+        return _normalize_site_settings(self.data.get("site"))
+
     def update(self, data: dict[str, object]) -> dict[str, object]:
         next_data = dict(self.data)
         next_data.update(dict(data or {}))
@@ -607,6 +643,8 @@ class ConfigStore:
             )
         if "third_party_apps" in next_data:
             next_data["third_party_apps"] = _normalize_third_party_apps_settings(next_data.get("third_party_apps"))
+        if "site" in next_data:
+            next_data["site"] = _normalize_site_settings(next_data.get("site"))
         if "proxy_runtime" in next_data:
             incoming_runtime = next_data.get("proxy_runtime")
             if isinstance(incoming_runtime, dict):

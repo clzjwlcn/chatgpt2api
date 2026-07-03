@@ -6,7 +6,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.image_inputs import parse_image_edit_request, read_image_sources
-from api.support import require_identity, resolve_image_base_url
+from api.support import require_generation_quota, require_identity, resolve_image_base_url
+from services.auth_service import auth_service
 from services.content_filter import check_request, request_shape, request_text
 from services.editable_file_task_service import editable_file_task_service
 from services.log_service import LoggedCall
@@ -99,7 +100,11 @@ def create_router() -> APIRouter:
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
         await filter_or_log(call, body.prompt)
-        return await call.run(openai_v1_image_generations.handle, payload)
+        require_generation_quota(identity, body.n)
+        response = await call.run(openai_v1_image_generations.handle, payload)
+        if isinstance(response, dict):
+            auth_service.consume_generation_quota(identity, len(response.get("data") or []) or body.n)
+        return response
 
     @router.post("/v1/images/edits")
     async def edit_images(
@@ -116,7 +121,12 @@ def create_router() -> APIRouter:
         if mask_sources:
             payload["mask"] = await read_image_sources(mask_sources)
         payload["base_url"] = resolve_image_base_url(request)
-        return await call.run(openai_v1_image_edit.handle, payload)
+        amount = max(1, int(payload.get("n") or 1))
+        require_generation_quota(identity, amount)
+        response = await call.run(openai_v1_image_edit.handle, payload)
+        if isinstance(response, dict):
+            auth_service.consume_generation_quota(identity, len(response.get("data") or []) or amount)
+        return response
 
     @router.post("/v1/chat/completions")
     async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):

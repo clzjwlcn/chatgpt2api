@@ -36,6 +36,8 @@ export function ConfigCard() {
   const setLogLevel = useSettingsStore((state) => state.setLogLevel);
   const setProxy = useSettingsStore((state) => state.setProxy);
   const setBaseUrl = useSettingsStore((state) => state.setBaseUrl);
+  const setSiteField = useSettingsStore((state) => state.setSiteField);
+  const setAnnouncementField = useSettingsStore((state) => state.setAnnouncementField);
   const setGlobalSystemPrompt = useSettingsStore((state) => state.setGlobalSystemPrompt);
   const setSensitiveWordsText = useSettingsStore((state) => state.setSensitiveWordsText);
   const setAIReviewField = useSettingsStore((state) => state.setAIReviewField);
@@ -84,6 +86,80 @@ export function ConfigCard() {
       <CardContent className="space-y-4 p-6">
         <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm leading-6 text-stone-600">
           管理员登录密钥继续从部署配置读取，不再在此页面展示；如需分发给其他人，请在下方创建普通用户密钥。
+        </div>
+        <div className="space-y-4 rounded-xl border border-stone-200 bg-white px-4 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-stone-900">全局设置</h2>
+            <p className="mt-1 text-xs text-stone-500">控制顶部品牌、Logo 和右上角外部链接。</p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-4">
+            <div className="space-y-2">
+              <label className="text-sm text-stone-700">网站名称</label>
+              <Input
+                value={String(config?.site?.name || "")}
+                onChange={(event) => setSiteField("name", event.target.value)}
+                placeholder="chatgpt2api"
+                className="h-10 rounded-xl border-stone-200 bg-white"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm text-stone-700">网站 Logo</label>
+              <Input
+                value={String(config?.site?.logo_url || "")}
+                onChange={(event) => setSiteField("logo_url", event.target.value)}
+                placeholder="https://example.com/logo.png"
+                className="h-10 rounded-xl border-stone-200 bg-white"
+              />
+              <p className="text-xs text-stone-500">支持图片 URL 或站内路径，例如 /logo.png。</p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm text-stone-700">GitHub 名称</label>
+              <Input
+                value={String(config?.site?.github_label || "")}
+                onChange={(event) => setSiteField("github_label", event.target.value)}
+                placeholder="GitHub"
+                className="h-10 rounded-xl border-stone-200 bg-white"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm text-stone-700">GitHub 链接</label>
+              <Input
+                value={String(config?.site?.github_url || "")}
+                onChange={(event) => setSiteField("github_url", event.target.value)}
+                placeholder="https://github.com/basketikun/chatgpt2api"
+                className="h-10 rounded-xl border-stone-200 bg-white"
+              />
+            </div>
+          </div>
+          <div className="space-y-4 rounded-xl border border-stone-100 bg-stone-50 px-4 py-3">
+            <label className="flex items-center gap-3 text-sm text-stone-700">
+              <Checkbox
+                checked={Boolean(config?.site?.announcement?.enabled)}
+                onCheckedChange={(checked) => setAnnouncementField("enabled", Boolean(checked))}
+              />
+              启用右上角悬浮公告
+            </label>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm text-stone-700">公告标题</label>
+                <Input
+                  value={String(config?.site?.announcement?.title || "")}
+                  onChange={(event) => setAnnouncementField("title", event.target.value)}
+                  placeholder="公告"
+                  className="h-10 rounded-xl border-stone-200 bg-white"
+                />
+              </div>
+              <div className="space-y-2 md:row-span-2">
+                <label className="text-sm text-stone-700">公告内容</label>
+                <Textarea
+                  value={String(config?.site?.announcement?.content || "")}
+                  onChange={(event) => setAnnouncementField("content", event.target.value)}
+                  placeholder="填写后会在右上角显示悬浮公告。"
+                  className="min-h-24 rounded-xl border-stone-200 bg-white text-sm shadow-none"
+                />
+              </div>
+            </div>
+          </div>
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">

@@ -152,8 +152,21 @@ export type ThirdPartyAppsSettings = {
   };
 };
 
+export type SiteSettings = {
+  name: string;
+  logo_url: string;
+  github_label: string;
+  github_url: string;
+  announcement: {
+    enabled: boolean;
+    title: string;
+    content: string;
+  };
+};
+
 export type SettingsConfig = {
   proxy: string;
+  site?: SiteSettings;
   base_url?: string;
   global_system_prompt?: string;
   sensitive_words?: string[];
@@ -316,6 +329,9 @@ export type UserKey = {
   enabled: boolean;
   created_at: string | null;
   last_used_at: string | null;
+  generation_limit: number;
+  generation_used: number;
+  generation_remaining: number | null;
 };
 
 export type OutlookPoolStats = {
@@ -577,6 +593,10 @@ export async function fetchThirdPartyApps() {
   return httpRequest<{ third_party_apps: ThirdPartyAppsSettings }>("/api/third-party-apps");
 }
 
+export async function fetchSiteSettings() {
+  return httpRequest<{ site: SiteSettings }>("/api/site");
+}
+
 export async function testBackupConnection() {
   return httpRequest<{ result: { ok: boolean; status: number } }>("/api/backup/test", {
     method: "POST",
@@ -723,14 +743,14 @@ export async function fetchUserKeys() {
   return httpRequest<{ items: UserKey[] }>("/api/auth/users");
 }
 
-export async function createUserKey(name: string) {
+export async function createUserKey(name: string, generationLimit = -1) {
   return httpRequest<{ item: UserKey; key: string; items: UserKey[] }>("/api/auth/users", {
     method: "POST",
-    body: { name },
+    body: { name, generation_limit: generationLimit },
   });
 }
 
-export async function updateUserKey(keyId: string, updates: { enabled?: boolean; name?: string; key?: string }) {
+export async function updateUserKey(keyId: string, updates: { enabled?: boolean; name?: string; key?: string; generation_limit?: number }) {
   return httpRequest<{ item: UserKey; items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "POST",
     body: updates,

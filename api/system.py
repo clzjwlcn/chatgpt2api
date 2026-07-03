@@ -86,6 +86,11 @@ def create_router(app_version: str) -> APIRouter:
         require_identity(authorization)
         return {"third_party_apps": config.get_third_party_apps_settings()}
 
+    @router.get("/api/site")
+    async def get_site_settings(authorization: str | None = Header(default=None)):
+        require_identity(authorization)
+        return {"site": config.get_site_settings()}
+
     @router.post("/api/settings")
     async def save_settings(body: SettingsUpdateRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)

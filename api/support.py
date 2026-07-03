@@ -46,6 +46,13 @@ def require_admin(authorization: str | None) -> dict[str, object]:
     return identity
 
 
+def require_generation_quota(identity: dict[str, object], amount: int = 1) -> None:
+    try:
+        auth_service.ensure_generation_quota(identity, amount)
+    except ValueError as exc:
+        raise HTTPException(status_code=429, detail={"error": str(exc)}) from exc
+
+
 def resolve_image_base_url(request: Request) -> str:
     return config.base_url or f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"
 

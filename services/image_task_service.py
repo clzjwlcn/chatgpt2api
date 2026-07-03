@@ -10,6 +10,7 @@ from typing import Any
 
 from services.config import DATA_DIR, config
 from services.content_filter import request_text
+from services.auth_service import auth_service
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
 
@@ -276,6 +277,7 @@ class ImageTaskService:
             usage = result.get("usage")
             duration_ms = int((time.time() - started) * 1000)
             self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, usage=usage, error="", duration_ms=duration_ms)
+            auth_service.consume_generation_quota(identity, max(1, len(data)))
             self._log_call(
                 identity,
                 mode,

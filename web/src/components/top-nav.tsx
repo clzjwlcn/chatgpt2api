@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Menu } from "lucide-react";
+import { Megaphone, Menu, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { HeaderActions } from "@/components/header-actions";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetClose, SheetContent, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import webConfig from "@/constants/common-env";
-import { fetchThirdPartyApps, type ThirdPartyAppsSettings } from "@/lib/api";
+import { fetchSiteSettings, fetchThirdPartyApps, type SiteSettings, type ThirdPartyAppsSettings } from "@/lib/api";
 import { getValidatedAuthSession } from "@/lib/auth-session";
 import { cn } from "@/lib/utils";
 import { clearStoredAuthSession, type StoredAuthSession } from "@/store/auth";
@@ -26,6 +26,18 @@ const adminNavItems = [
 ];
 
 const userNavItems = [{ href: "/image", label: "画图" }];
+
+const DEFAULT_SITE: SiteSettings = {
+  name: "chatgpt2api",
+  logo_url: "",
+  github_label: "GitHub",
+  github_url: "https://github.com/basketikun/chatgpt2api",
+  announcement: {
+    enabled: false,
+    title: "公告",
+    content: "",
+  },
+};
 
 function buildThirdPartyHref(appUrl: string, baseUrl: string, apiKey: string) {
   const url = appUrl.trim();
@@ -44,7 +56,9 @@ export function TopNav() {
   const router = useRouter();
   const [session, setSession] = useState<StoredAuthSession | null | undefined>(undefined);
   const [thirdPartyApps, setThirdPartyApps] = useState<ThirdPartyAppsSettings | null>(null);
+  const [site, setSite] = useState<SiteSettings>(DEFAULT_SITE);
   const [isCanvasDialogOpen, setIsCanvasDialogOpen] = useState(false);
+  const [isAnnouncementDismissed, setIsAnnouncementDismissed] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -99,6 +113,48 @@ export function TopNav() {
     };
   }, [session]);
 
+  useEffect(() => {
+    if (!session) {
+      setSite(DEFAULT_SITE);
+      return;
+    }
+    let active = true;
+    const load = async () => {
+      try {
+        const data = await fetchSiteSettings();
+        if (active) {
+          setSite({
+            name: String(data.site?.name || DEFAULT_SITE.name),
+            logo_url: String(data.site?.logo_url || ""),
+            github_label: String(data.site?.github_label || DEFAULT_SITE.github_label),
+            github_url: String(data.site?.github_url || DEFAULT_SITE.github_url),
+            announcement: {
+              enabled: Boolean(data.site?.announcement?.enabled),
+              title: String(data.site?.announcement?.title || DEFAULT_SITE.announcement.title),
+              content: String(data.site?.announcement?.content || ""),
+            },
+          });
+        }
+      } catch {
+        if (active) {
+          setSite(DEFAULT_SITE);
+        }
+      }
+    };
+    const reload = () => void load();
+
+    void load();
+    window.addEventListener("site-settings-updated", reload);
+    return () => {
+      active = false;
+      window.removeEventListener("site-settings-updated", reload);
+    };
+  }, [session]);
+
+  useEffect(() => {
+    setIsAnnouncementDismissed(false);
+  }, [site.announcement?.enabled, site.announcement?.title, site.announcement?.content]);
+
   const handleLogout = async () => {
     await clearStoredAuthSession();
     router.replace("/login");
@@ -115,6 +171,14 @@ export function TopNav() {
   const canvas = thirdPartyApps?.infinite_canvas;
   const canvasHref = canvas?.enabled && canvas.url.trim() ? buildThirdPartyHref(canvas.url, baseUrl, session.key) : "";
   const canvasDisplayHref = canvasHref ? decodeURIComponent(canvasHref) : "";
+  const siteName = site.name.trim() || DEFAULT_SITE.name;
+  const logoUrl = site.logo_url.trim();
+  const announcement = site.announcement;
+  const showAnnouncement = Boolean(
+    announcement?.enabled
+    && String(announcement.content || "").trim()
+    && !isAnnouncementDismissed,
+  );
 
   const handleCanvasOpen = () => {
     if (!canvasHref) {
@@ -142,7 +206,7 @@ export function TopNav() {
               </SheetTrigger>
               <SheetContent side="left">
                 <SheetHeader>
-                  <SheetTitle>chatgpt2api</SheetTitle>
+                  <SheetTitle>{siteName}</SheetTitle>
                   <span className="text-xs text-stone-500 dark:text-stone-400">{roleLabel} · {displayName}</span>
                 </SheetHeader>
                 <nav className="mt-8 flex flex-col gap-1">
@@ -183,11 +247,12 @@ export function TopNav() {
             </Sheet>
             <Link
               href="/image"
-              className="shrink-0 py-1 text-[15px] font-bold tracking-tight text-stone-950 transition hover:text-stone-700 dark:text-stone-50 dark:hover:text-white"
+              className="flex min-w-0 shrink-0 items-center gap-2 py-1 text-[15px] font-bold tracking-tight text-stone-950 transition hover:text-stone-700 dark:text-stone-50 dark:hover:text-white"
             >
-              chatgpt2api
+              {logoUrl ? <img src={logoUrl} alt="" className="size-6 shrink-0 rounded object-contain" /> : null}
+              <span className="truncate">{siteName}</span>
             </Link>
-            <HeaderActions className="ml-auto sm:hidden" showGithubText={false} />
+            <HeaderActions className="ml-auto sm:hidden" showGithubText={false} githubLabel={site.github_label} githubUrl={site.github_url} />
           </div>
           <nav className="hide-scrollbar -mx-1 hidden min-w-0 flex-1 gap-1 overflow-x-auto px-1 sm:mx-0 sm:flex sm:justify-center sm:gap-8 sm:overflow-visible sm:px-0">
             {canvasHref ? (
@@ -219,7 +284,7 @@ export function TopNav() {
             })}
           </nav>
           <div className="hidden items-center justify-end gap-2 sm:flex sm:gap-3">
-            <HeaderActions />
+            <HeaderActions githubLabel={site.github_label} githubUrl={site.github_url} />
             <span className="hidden rounded-md bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-500 dark:bg-white/8 dark:text-stone-300 sm:inline-block sm:text-[11px]">
               {roleLabel} · {displayName}
             </span>
@@ -233,6 +298,31 @@ export function TopNav() {
           </div>
         </div>
       </header>
+      {showAnnouncement ? (
+        <div className="fixed top-16 right-4 z-50 w-[min(calc(100vw-2rem),360px)] rounded-xl border border-amber-200 bg-white/95 p-4 text-stone-800 shadow-xl shadow-stone-900/10 backdrop-blur dark:border-amber-500/30 dark:bg-stone-950/95 dark:text-stone-100">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200">
+              <Megaphone className="size-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="pr-8 text-sm font-semibold text-stone-950 dark:text-white">
+                {String(announcement.title || DEFAULT_SITE.announcement.title)}
+              </div>
+              <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-stone-600 dark:text-stone-300">
+                {String(announcement.content || "")}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="absolute top-3 right-3 inline-flex size-7 items-center justify-center rounded-lg text-stone-400 transition hover:bg-stone-100 hover:text-stone-700 dark:hover:bg-white/10 dark:hover:text-stone-100"
+              onClick={() => setIsAnnouncementDismissed(true)}
+              aria-label="关闭公告"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        </div>
+      ) : null}
       <Dialog open={isCanvasDialogOpen} onOpenChange={setIsCanvasDialogOpen}>
         <DialogContent showCloseButton={false} className="rounded-2xl p-6">
           <DialogHeader className="gap-2">
