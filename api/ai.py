@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.image_inputs import parse_image_edit_request, read_image_sources
-from api.support import require_generation_quota, require_identity, resolve_image_base_url
+from api.support import require_identity, resolve_image_base_url
 from services.auth_service import auth_service
 from services.content_filter import check_request, request_shape, request_text
 from services.editable_file_task_service import editable_file_task_service
@@ -78,6 +78,29 @@ async def filter_or_log(call: LoggedCall, text: str) -> None:
         raise
 
 
+def _reserve_generation_quota(identity: dict[str, object], amount: int) -> int:
+    try:
+        reserved = auth_service.reserve_generation_quota(identity, amount)
+    except ValueError as exc:
+        raise HTTPException(status_code=429, detail={"error": str(exc)}) from exc
+    return amount if reserved is not None else 0
+
+
+def _settle_generation_quota(identity: dict[str, object], reserved_amount: int, response: object) -> None:
+    if reserved_amount <= 0:
+        return
+    if not isinstance(response, dict):
+        auth_service.refund_generation_quota(identity, reserved_amount)
+        return
+    data = response.get("data")
+    generated = len(data) if isinstance(data, list) else 0
+    if generated <= 0:
+        auth_service.refund_generation_quota(identity, reserved_amount)
+        return
+    if generated < reserved_amount:
+        auth_service.refund_generation_quota(identity, reserved_amount - generated)
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
@@ -100,10 +123,13 @@ def create_router() -> APIRouter:
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
         await filter_or_log(call, body.prompt)
-        require_generation_quota(identity, body.n)
-        response = await call.run(openai_v1_image_generations.handle, payload)
-        if isinstance(response, dict):
-            auth_service.consume_generation_quota(identity, len(response.get("data") or []) or body.n)
+        reserved_amount = _reserve_generation_quota(identity, body.n)
+        try:
+            response = await call.run(openai_v1_image_generations.handle, payload)
+        except Exception:
+            auth_service.refund_generation_quota(identity, reserved_amount)
+            raise
+        _settle_generation_quota(identity, reserved_amount, response)
         return response
 
     @router.post("/v1/images/edits")
@@ -122,10 +148,13 @@ def create_router() -> APIRouter:
             payload["mask"] = await read_image_sources(mask_sources)
         payload["base_url"] = resolve_image_base_url(request)
         amount = max(1, int(payload.get("n") or 1))
-        require_generation_quota(identity, amount)
-        response = await call.run(openai_v1_image_edit.handle, payload)
-        if isinstance(response, dict):
-            auth_service.consume_generation_quota(identity, len(response.get("data") or []) or amount)
+        reserved_amount = _reserve_generation_quota(identity, amount)
+        try:
+            response = await call.run(openai_v1_image_edit.handle, payload)
+        except Exception:
+            auth_service.refund_generation_quota(identity, reserved_amount)
+            raise
+        _settle_generation_quota(identity, reserved_amount, response)
         return response
 
     @router.post("/v1/chat/completions")

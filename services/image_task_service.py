@@ -97,6 +97,15 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+def _reserved_quota_amount(task: dict[str, Any] | None) -> int:
+    if not isinstance(task, dict):
+        return 0
+    try:
+        return max(0, int(task.get("generation_quota_reserved") or 0))
+    except (OverflowError, TypeError, ValueError):
+        return 0
+
+
 class ImageTaskService:
     def __init__(
         self,
@@ -226,6 +235,12 @@ class ImageTaskService:
                 "updated_at": now,
                 "created_ts": time.time(),
             }
+            try:
+                reserved = auth_service.reserve_generation_quota(identity, 1)
+                if reserved is not None:
+                    task["generation_quota_reserved"] = 1
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
             self._tasks[key] = task
             self._save_locked()
             should_start = True
@@ -277,7 +292,6 @@ class ImageTaskService:
             usage = result.get("usage")
             duration_ms = int((time.time() - started) * 1000)
             self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, usage=usage, error="", duration_ms=duration_ms)
-            auth_service.consume_generation_quota(identity, max(1, len(data)))
             self._log_call(
                 identity,
                 mode,
@@ -296,6 +310,7 @@ class ImageTaskService:
             self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[],
                               duration_ms=duration_ms,
                               **({"conversation_id": conversation_id} if conversation_id else {}))
+            self._refund_reserved_quota(key, identity)
             self._log_call(
                 identity,
                 mode,
@@ -394,6 +409,9 @@ class ImageTaskService:
                 "started_ts": item.get("started_ts"),
                 "duration_ms": item.get("duration_ms"),
             }
+            reserved = _reserved_quota_amount(item)
+            if reserved:
+                task["generation_quota_reserved"] = reserved
             data = item.get("data")
             if isinstance(data, list):
                 task["data"] = data
@@ -416,11 +434,27 @@ class ImageTaskService:
         changed = False
         for task in self._tasks.values():
             if task.get("status") in UNFINISHED_STATUSES:
+                reserved = _reserved_quota_amount(task)
+                if reserved:
+                    auth_service.refund_generation_quota_by_id(_clean(task.get("owner_id")), reserved)
+                    task["generation_quota_reserved"] = 0
                 task["status"] = TASK_STATUS_ERROR
                 task["error"] = "服务已重启，未完成的图片任务已中断"
                 task["updated_at"] = _now_iso()
                 changed = True
         return changed
+
+    def _refund_reserved_quota(self, key: str, identity: dict[str, object] | None = None) -> None:
+        with self._lock:
+            task = self._tasks.get(key)
+            reserved = _reserved_quota_amount(task)
+            if not task or reserved <= 0:
+                return
+            task["generation_quota_reserved"] = 0
+            task["updated_at"] = _now_iso()
+            self._save_locked()
+            key_id = _clean((identity or {}).get("id")) or _clean(task.get("owner_id"))
+        auth_service.refund_generation_quota_by_id(key_id, reserved)
 
     def _cleanup_locked(self) -> bool:
         try:
@@ -460,6 +494,12 @@ class ImageTaskService:
                 raise ValueError("task has no conversation_id")
             mode = task.get("mode", "generate")
             model = task.get("model", "gpt-image-2")
+            try:
+                reserved = auth_service.reserve_generation_quota(identity, 1)
+                if reserved is not None:
+                    task["generation_quota_reserved"] = 1
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
             # 将任务状态重置为 running
             self._update_task(key, status=TASK_STATUS_RUNNING, error="")
 
@@ -535,6 +575,7 @@ class ImageTaskService:
             error_message = str(exc) or "resume poll failed"
             duration_ms = int((time.time() - started) * 1000)
             self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[], duration_ms=duration_ms)
+            self._refund_reserved_quota(key, identity)
             self._log_call(
                 identity,
                 mode,

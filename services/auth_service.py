@@ -120,6 +120,17 @@ class AuthService:
             items = [item for item in self._items if role is None or item.get("role") == role]
             return [self._public_item(item) for item in items]
 
+    def get_key(self, key_id: str, *, role: AuthRole | None = None) -> dict[str, object] | None:
+        normalized_id = self._clean(key_id)
+        if not normalized_id:
+            return None
+        with self._lock:
+            self._reload_locked()
+            for item in self._items:
+                if item.get("id") == normalized_id and (role is None or item.get("role") == role):
+                    return self._public_item(item)
+        return None
+
     def _has_key_hash_locked(self, key_hash: str, *, exclude_id: str = "") -> bool:
         for item in self._items:
             item_id = self._clean(item.get("id"))
@@ -338,6 +349,54 @@ class AuthService:
                 self._save()
                 return self._public_item(next_item)
         return None
+
+    def reserve_generation_quota(self, identity: dict[str, object], amount: int = 1) -> dict[str, object] | None:
+        if identity.get("role") == "admin":
+            return None
+        key_id = self._clean(identity.get("id"))
+        if not key_id:
+            raise ValueError("用户密钥不存在或已失效")
+        amount = max(1, int(amount or 1))
+        with self._lock:
+            self._reload_locked()
+            for index, item in enumerate(self._items):
+                if item.get("id") != key_id or item.get("role") != "user":
+                    continue
+                if not bool(item.get("enabled", True)):
+                    raise ValueError("用户密钥已被禁用")
+                limit = self._normalize_generation_limit(item.get("generation_limit"))
+                if limit < 0:
+                    return self._public_item(item)
+                used = self._normalize_generation_used(item.get("generation_used"))
+                if used + amount > limit:
+                    raise ValueError("生成次数已用完，请联系管理员增加次数")
+                next_item = dict(item)
+                next_item["generation_used"] = used + amount
+                self._items[index] = next_item
+                self._save()
+                return self._public_item(next_item)
+        raise ValueError("用户密钥不存在或已失效")
+
+    def refund_generation_quota_by_id(self, key_id: str, amount: int = 1) -> dict[str, object] | None:
+        normalized_id = self._clean(key_id)
+        if not normalized_id or normalized_id == "admin":
+            return None
+        amount = max(1, int(amount or 1))
+        with self._lock:
+            self._reload_locked()
+            for index, item in enumerate(self._items):
+                if item.get("id") != normalized_id or item.get("role") != "user":
+                    continue
+                used = self._normalize_generation_used(item.get("generation_used"))
+                next_item = dict(item)
+                next_item["generation_used"] = max(0, used - amount)
+                self._items[index] = next_item
+                self._save()
+                return self._public_item(next_item)
+        return None
+
+    def refund_generation_quota(self, identity: dict[str, object], amount: int = 1) -> dict[str, object] | None:
+        return self.refund_generation_quota_by_id(self._clean(identity.get("id")), amount)
 
 
 auth_service = AuthService(config.get_storage_backend())

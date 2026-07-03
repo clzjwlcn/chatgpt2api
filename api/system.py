@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from api.support import require_admin, require_identity, resolve_image_base_url
+from services.auth_service import auth_service
 from services.backup_service import BackupError, backup_service
 from services.config import config
 from services.image_service import (
@@ -70,6 +71,31 @@ def create_router(app_version: str) -> APIRouter:
             "role": identity.get("role"),
             "subject_id": identity.get("id"),
             "name": identity.get("name"),
+        }
+
+    @router.get("/api/auth/me")
+    async def get_current_auth_profile(authorization: str | None = Header(default=None)):
+        identity = require_identity(authorization)
+        if identity.get("role") == "user":
+            latest = auth_service.get_key(str(identity.get("id") or ""), role="user") or identity
+            return {
+                "id": latest.get("id"),
+                "name": latest.get("name"),
+                "role": latest.get("role"),
+                "enabled": latest.get("enabled"),
+                "created_at": latest.get("created_at"),
+                "last_used_at": latest.get("last_used_at"),
+                "generation_limit": latest.get("generation_limit"),
+                "generation_used": latest.get("generation_used"),
+                "generation_remaining": latest.get("generation_remaining"),
+            }
+        return {
+            "id": identity.get("id"),
+            "name": identity.get("name"),
+            "role": identity.get("role"),
+            "generation_limit": -1,
+            "generation_used": 0,
+            "generation_remaining": None,
         }
 
     @router.get("/version")

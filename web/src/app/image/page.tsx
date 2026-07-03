@@ -21,6 +21,7 @@ import {
   createImageEditTask,
   createImageGenerationTask,
   fetchAccounts,
+  fetchAuthProfile,
   fetchModels,
   fetchImageTasks,
   resumeImagePoll,
@@ -118,6 +119,16 @@ function formatConversationTime(value: string) {
 function formatAvailableQuota(accounts: Account[]) {
   const availableAccounts = accounts.filter((account) => account.status !== "禁用");
   return String(availableAccounts.reduce((sum, account) => sum + Math.max(0, account.quota), 0));
+}
+
+function formatUserGenerationQuota(profile: Awaited<ReturnType<typeof fetchAuthProfile>>) {
+  const used = Math.max(0, Number(profile.generation_used || 0));
+  const limit = Number(profile.generation_limit);
+  if (limit < 0) {
+    return `不限 · 已用 ${used}`;
+  }
+  const remaining = Math.max(0, Number(profile.generation_remaining ?? Math.max(0, limit - used)));
+  return `${remaining} · 已用 ${used}/${Math.max(0, limit)}`;
 }
 
 function createId() {
@@ -717,13 +728,14 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   }, []);
 
   const loadQuota = useCallback(async () => {
-    if (!isAdmin) {
-      setAvailableQuota("--");
-      return;
-    }
     try {
-      const data = await fetchAccounts();
-      setAvailableQuota(formatAvailableQuota(data.items));
+      if (isAdmin) {
+        const data = await fetchAccounts();
+        setAvailableQuota(formatAvailableQuota(data.items));
+        return;
+      }
+      const profile = await fetchAuthProfile();
+      setAvailableQuota(formatUserGenerationQuota(profile));
     } catch {
       setAvailableQuota((prev) => (prev === "加载中..." ? "--" : prev));
     }
@@ -1245,6 +1257,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           }),
         );
         await applyTasks(submitted);
+        await loadQuota();
 
         let consecutiveErrors = 0;
         const retryingTaskIdsRef = new Set<string>();
@@ -1298,6 +1311,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               );
               if (resubmitted.length > 0) {
                 await applyTasks(resubmitted);
+                await loadQuota();
               }
             }
           } catch (pollError) {
@@ -1331,6 +1345,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           };
         });
         toast.error(message);
+        await loadQuota();
       } finally {
         activeConversationQueueIds.delete(conversationId);
         for (const conversation of conversationsRef.current) {

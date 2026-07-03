@@ -27,6 +27,13 @@ def _parse_task_ids(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _value_error_status_code(exc: ValueError) -> int:
+    message = str(exc)
+    if "生成次数" in message or "用户密钥" in message:
+        return 429
+    return 400
+
+
 async def filter_or_log(call: LoggedCall, text: str) -> None:
     try:
         await run_in_threadpool(check_request, text)
@@ -67,7 +74,7 @@ def create_router() -> APIRouter:
                 base_url=resolve_image_base_url(request),
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=_value_error_status_code(exc), detail={"error": str(exc)}) from exc
 
     @router.post("/api/image-tasks/edits")
     async def create_edit_task(
@@ -99,7 +106,7 @@ def create_router() -> APIRouter:
                 masks=masks,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=_value_error_status_code(exc), detail={"error": str(exc)}) from exc
 
     @router.post("/api/image-tasks/{task_id}/resume-poll")
     async def resume_image_poll(
@@ -117,6 +124,6 @@ def create_router() -> APIRouter:
                 body.extra_timeout_secs,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=_value_error_status_code(exc), detail={"error": str(exc)}) from exc
 
     return router

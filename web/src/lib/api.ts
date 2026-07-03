@@ -322,6 +322,18 @@ export type LoginResponse = {
   name: string;
 };
 
+export type AuthProfile = {
+  id: string;
+  name: string;
+  role: AuthRole;
+  enabled?: boolean;
+  created_at?: string | null;
+  last_used_at?: string | null;
+  generation_limit: number;
+  generation_used: number;
+  generation_remaining: number | null;
+};
+
 export type UserKey = {
   id: string;
   name: string;
@@ -391,6 +403,10 @@ export async function login(authKey: string) {
     },
     redirectOnUnauthorized: false,
   });
+}
+
+export async function fetchAuthProfile() {
+  return httpRequest<AuthProfile>("/api/auth/me");
 }
 
 export async function fetchAccounts() {
