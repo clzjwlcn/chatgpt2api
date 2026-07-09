@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Literal
 
@@ -55,6 +55,41 @@ class AuthService:
         except (OverflowError, TypeError, ValueError):
             return 0
 
+    @staticmethod
+    def _normalize_expires_in_days(value: object) -> int:
+        try:
+            days = int(value)
+        except (OverflowError, TypeError, ValueError):
+            return 0
+        return max(0, days)
+
+    @staticmethod
+    def _parse_datetime(value: object) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _expires_at_from_days(value: object) -> str | None:
+        days = AuthService._normalize_expires_in_days(value)
+        if days <= 0:
+            return None
+        return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+
+    @staticmethod
+    def _is_expired(item: dict[str, object], *, now: datetime | None = None) -> bool:
+        expires_at = AuthService._parse_datetime(item.get("expires_at"))
+        if expires_at is None:
+            return False
+        return expires_at <= (now or datetime.now(timezone.utc))
+
     def _normalize_item(self, raw: object) -> dict[str, object] | None:
         if not isinstance(raw, dict):
             return None
@@ -68,6 +103,7 @@ class AuthService:
         name = self._clean(raw.get("name")) or self._default_name(role)
         created_at = self._clean(raw.get("created_at")) or _now_iso()
         last_used_at = self._clean(raw.get("last_used_at")) or None
+        expires_at = self._clean(raw.get("expires_at")) or None
         generation_limit = self._normalize_generation_limit(raw.get("generation_limit"))
         generation_used = self._normalize_generation_used(raw.get("generation_used"))
         return {
@@ -78,6 +114,7 @@ class AuthService:
             "enabled": bool(raw.get("enabled", True)),
             "created_at": created_at,
             "last_used_at": last_used_at,
+            "expires_at": expires_at,
             "generation_limit": generation_limit,
             "generation_used": generation_used,
         }
@@ -97,6 +134,19 @@ class AuthService:
     def _reload_locked(self) -> None:
         self._items = self._load()
 
+    def _disable_expired_locked(self) -> bool:
+        now = datetime.now(timezone.utc)
+        changed = False
+        for index, item in enumerate(self._items):
+            if bool(item.get("enabled", True)) and self._is_expired(item, now=now):
+                next_item = dict(item)
+                next_item["enabled"] = False
+                self._items[index] = next_item
+                changed = True
+        if changed:
+            self._save()
+        return changed
+
     @staticmethod
     def _public_item(item: dict[str, object]) -> dict[str, object]:
         generation_limit = AuthService._normalize_generation_limit(item.get("generation_limit"))
@@ -109,6 +159,8 @@ class AuthService:
             "enabled": bool(item.get("enabled", True)),
             "created_at": item.get("created_at"),
             "last_used_at": item.get("last_used_at"),
+            "expires_at": item.get("expires_at"),
+            "expired": AuthService._is_expired(item),
             "generation_limit": generation_limit,
             "generation_used": generation_used,
             "generation_remaining": generation_remaining,
@@ -117,6 +169,7 @@ class AuthService:
     def list_keys(self, role: AuthRole | None = None) -> list[dict[str, object]]:
         with self._lock:
             self._reload_locked()
+            self._disable_expired_locked()
             items = [item for item in self._items if role is None or item.get("role") == role]
             return [self._public_item(item) for item in items]
 
@@ -126,6 +179,7 @@ class AuthService:
             return None
         with self._lock:
             self._reload_locked()
+            self._disable_expired_locked()
             for item in self._items:
                 if item.get("id") == normalized_id and (role is None or item.get("role") == role):
                     return self._public_item(item)
@@ -192,6 +246,7 @@ class AuthService:
         role: AuthRole,
         name: str = "",
         generation_limit: int = UNLIMITED_GENERATION_LIMIT,
+        expires_in_days: int = 0,
     ) -> tuple[dict[str, object], str]:
         with self._lock:
             self._reload_locked()
@@ -211,6 +266,7 @@ class AuthService:
                 "enabled": True,
                 "created_at": _now_iso(),
                 "last_used_at": None,
+                "expires_at": self._expires_at_from_days(expires_in_days),
                 "generation_limit": self._normalize_generation_limit(generation_limit),
                 "generation_used": 0,
             }
@@ -255,6 +311,10 @@ class AuthService:
                             self._normalize_generation_used(next_item.get("generation_used")),
                             next_limit,
                         )
+                if "expires_in_days" in updates and updates.get("expires_in_days") is not None:
+                    next_item["expires_at"] = self._expires_at_from_days(updates.get("expires_in_days"))
+                    if next_item["expires_at"] is not None:
+                        next_item["enabled"] = True
                 self._items[index] = next_item
                 self._save()
                 return self._public_item(next_item)
@@ -283,6 +343,8 @@ class AuthService:
             return None
         candidate_hash = _hash_key(candidate)
         with self._lock:
+            self._reload_locked()
+            self._disable_expired_locked()
             for index, item in enumerate(self._items):
                 if not bool(item.get("enabled", True)):
                     continue
@@ -313,6 +375,7 @@ class AuthService:
         amount = max(1, int(amount or 1))
         with self._lock:
             self._reload_locked()
+            self._disable_expired_locked()
             for item in self._items:
                 if item.get("id") != key_id or item.get("role") != "user":
                     continue
@@ -336,9 +399,12 @@ class AuthService:
         amount = max(1, int(amount or 1))
         with self._lock:
             self._reload_locked()
+            self._disable_expired_locked()
             for index, item in enumerate(self._items):
                 if item.get("id") != key_id or item.get("role") != "user":
                     continue
+                if not bool(item.get("enabled", True)):
+                    return None
                 limit = self._normalize_generation_limit(item.get("generation_limit"))
                 if limit < 0:
                     return self._public_item(item)
@@ -359,6 +425,7 @@ class AuthService:
         amount = max(1, int(amount or 1))
         with self._lock:
             self._reload_locked()
+            self._disable_expired_locked()
             for index, item in enumerate(self._items):
                 if item.get("id") != key_id or item.get("role") != "user":
                     continue

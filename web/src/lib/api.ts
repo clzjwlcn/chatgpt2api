@@ -297,6 +297,7 @@ export type ImageTask = {
   status: "queued" | "running" | "success" | "error";
   mode: "generate" | "edit";
   model?: ImageModel;
+  prompt?: string;
   size?: string;
   quality?: string;
   created_at: string;
@@ -341,6 +342,8 @@ export type UserKey = {
   enabled: boolean;
   created_at: string | null;
   last_used_at: string | null;
+  expires_at?: string | null;
+  expired?: boolean;
   generation_limit: number;
   generation_used: number;
   generation_remaining: number | null;
@@ -759,14 +762,17 @@ export async function fetchUserKeys() {
   return httpRequest<{ items: UserKey[] }>("/api/auth/users");
 }
 
-export async function createUserKey(name: string, generationLimit = -1) {
+export async function createUserKey(name: string, generationLimit = -1, expiresInDays = 0) {
   return httpRequest<{ item: UserKey; key: string; items: UserKey[] }>("/api/auth/users", {
     method: "POST",
-    body: { name, generation_limit: generationLimit },
+    body: { name, generation_limit: generationLimit, expires_in_days: expiresInDays },
   });
 }
 
-export async function updateUserKey(keyId: string, updates: { enabled?: boolean; name?: string; key?: string; generation_limit?: number }) {
+export async function updateUserKey(
+  keyId: string,
+  updates: { enabled?: boolean; name?: string; key?: string; generation_limit?: number; expires_in_days?: number },
+) {
   return httpRequest<{ item: UserKey; items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "POST",
     body: updates,

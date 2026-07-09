@@ -38,6 +38,7 @@ from services.sub2api_service import (
 class UserKeyCreateRequest(BaseModel):
     name: str = ""
     generation_limit: int = -1
+    expires_in_days: int = 0
 
 
 class UserKeyUpdateRequest(BaseModel):
@@ -45,6 +46,7 @@ class UserKeyUpdateRequest(BaseModel):
     enabled: bool | None = None
     key: str | None = None
     generation_limit: int | None = None
+    expires_in_days: int | None = None
 
 
 class AccountCreateRequest(BaseModel):
@@ -175,6 +177,7 @@ def create_router() -> APIRouter:
                 role="user",
                 name=body.name,
                 generation_limit=body.generation_limit,
+                expires_in_days=body.expires_in_days,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
@@ -194,6 +197,7 @@ def create_router() -> APIRouter:
                 "enabled": body.enabled,
                 "key": body.key,
                 "generation_limit": body.generation_limit,
+                "expires_in_days": body.expires_in_days,
             }.items()
             if value is not None
         }

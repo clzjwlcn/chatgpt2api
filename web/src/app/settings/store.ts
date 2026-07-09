@@ -143,7 +143,7 @@ function normalizeThirdPartyApps(value: unknown): ThirdPartyAppsSettings {
 
 function normalizeSite(value: unknown): SiteSettings {
   const source = typeof value === "object" && value !== null ? value as Partial<SiteSettings> : {};
-  const announcement = typeof source.announcement === "object" && source.announcement
+  const announcement: Partial<SiteSettings["announcement"]> = typeof source.announcement === "object" && source.announcement
     ? source.announcement
     : {};
   return {

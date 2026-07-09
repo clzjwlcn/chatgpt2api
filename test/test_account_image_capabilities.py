@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,17 +18,18 @@ from utils.helper import anonymize_token, split_image_model
 
 
 class AccountCapabilityTests(unittest.TestCase):
-    def test_unknown_quota_accounts_are_available_only_when_not_throttled(self) -> None:
+    def test_image_accounts_require_positive_quota(self) -> None:
         self.assertFalse(
             AccountService._is_image_account_available(
-                {"status": "限流", "image_quota_unknown": True, "quota": 0}
+                {"status": "限流", "quota": 1}
             )
         )
-        self.assertTrue(
+        self.assertFalse(
             AccountService._is_image_account_available(
-                {"status": "正常", "image_quota_unknown": True, "quota": 0}
+                {"status": "正常", "quota": 0}
             )
         )
+        self.assertTrue(AccountService._is_image_account_available({"status": "正常", "quota": 1}))
 
     def test_prolite_variants_are_normalized(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -49,7 +51,7 @@ class AccountCapabilityTests(unittest.TestCase):
                 )
             )
 
-    def test_mark_image_result_does_not_consume_unknown_quota(self) -> None:
+    def test_mark_image_result_consumes_quota(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
             service.add_accounts(["token-1"])
@@ -57,8 +59,7 @@ class AccountCapabilityTests(unittest.TestCase):
                 "token-1",
                 {
                     "status": "正常",
-                    "quota": 0,
-                    "image_quota_unknown": True,
+                    "quota": 1,
                 },
             )
 
@@ -66,8 +67,7 @@ class AccountCapabilityTests(unittest.TestCase):
 
             self.assertIsNotNone(updated)
             self.assertEqual(updated["quota"], 0)
-            self.assertEqual(updated["status"], "正常")
-            self.assertTrue(updated["image_quota_unknown"])
+            self.assertEqual(updated["status"], "限流")
 
     def test_split_image_model_supports_plan_type_prefix(self) -> None:
         self.assertEqual(split_image_model("gpt-image-2"), (None, "gpt-image-2"))
@@ -212,6 +212,24 @@ class AuthServiceTests(unittest.TestCase):
             authed = service.authenticate("sk-user-custom-key")
             self.assertIsNotNone(authed)
             self.assertEqual(authed["id"], item["id"])
+
+    def test_user_key_expires_and_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
+            item, raw_key = service.create_key(role="user", name="Alice", expires_in_days=1)
+
+            self.assertIsNotNone(item["expires_at"])
+            with service._lock:
+                service._items[0]["expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+                service._items[0]["enabled"] = True
+                service._save()
+
+            listed = service.list_keys(role="user")
+
+            self.assertEqual(len(listed), 1)
+            self.assertFalse(listed[0]["enabled"])
+            self.assertTrue(listed[0]["expired"])
+            self.assertIsNone(service.authenticate(raw_key))
 
     def test_user_key_name_must_be_unique(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

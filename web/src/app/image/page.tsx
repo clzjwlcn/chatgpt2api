@@ -289,6 +289,100 @@ function sortImageConversations(conversations: ImageConversation[]) {
   return [...conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+function toIsoDateTime(value: string | undefined) {
+  if (!value) {
+    return new Date().toISOString();
+  }
+  const date = new Date(value.includes("T") ? value : value.replace(" ", "T"));
+  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+}
+
+function taskPrompt(task: ImageTask) {
+  return (
+    task.prompt?.trim() ||
+    task.data?.find((item) => item.revised_prompt?.trim())?.revised_prompt?.trim() ||
+    "已恢复的图片任务"
+  );
+}
+
+function taskToRecoveredConversation(task: ImageTask): ImageConversation {
+  const createdAt = toIsoDateTime(task.created_at);
+  const updatedAt = toIsoDateTime(task.updated_at || task.created_at);
+  const prompt = taskPrompt(task);
+  const images = task.status === "success" && task.data?.length
+    ? task.data.map((item, index): StoredImage => ({
+        id: `${task.id}-${index}`,
+        taskId: task.id,
+        status: item.b64_json || item.url ? "success" : "error",
+        b64_json: item.b64_json,
+        url: item.url,
+        revised_prompt: item.revised_prompt,
+        error: item.b64_json || item.url ? undefined : "未返回图片数据",
+        durationMs: task.duration_ms,
+      }))
+    : [{
+        id: `${task.id}-0`,
+        taskId: task.id,
+        status: task.status === "error" ? "error" as const : "loading" as const,
+        taskStatus: task.status === "queued" || task.status === "running" ? task.status : undefined,
+        progress: task.progress,
+        error: task.error,
+        durationMs: task.duration_ms,
+      }];
+  const turnStatus = task.status === "queued"
+    ? "queued"
+    : task.status === "running"
+      ? "generating"
+      : task.status;
+
+  return {
+    id: `recovered-${task.id}`,
+    title: buildConversationTitle(prompt),
+    createdAt,
+    updatedAt,
+    turns: [{
+      id: `turn-${task.id}`,
+      prompt,
+      model: task.model || "gpt-image-2",
+      mode: task.mode === "edit" ? "edit" : "generate",
+      referenceImages: [],
+      count: Math.max(1, images.length),
+      size: task.size || "1024x1024",
+      ratio: "1:1",
+      tier: "1k",
+      quality: task.quality || "auto",
+      images,
+      createdAt,
+      status: turnStatus,
+      error: task.error,
+    }],
+  };
+}
+
+async function recoverConversationsFromTasks(items: ImageConversation[]) {
+  let taskList: Awaited<ReturnType<typeof fetchImageTasks>>;
+  try {
+    taskList = await fetchImageTasks([]);
+  } catch {
+    return items;
+  }
+  const knownTaskIds = new Set(
+    items.flatMap((conversation) =>
+      conversation.turns.flatMap((turn) => turn.images.flatMap((image) => (image.taskId ? [image.taskId] : []))),
+    ),
+  );
+  const recovered = taskList.items
+    .filter((task) => !knownTaskIds.has(task.id))
+    .filter((task) => task.status === "success" || task.status === "error")
+    .map(taskToRecoveredConversation);
+  if (recovered.length === 0) {
+    return items;
+  }
+  const nextItems = sortImageConversations([...items, ...recovered]);
+  await saveImageConversations(nextItems);
+  return nextItems;
+}
+
 function deriveTurnStatus(turn: ImageTurn): Pick<ImageTurn, "status" | "error"> {
   const loadingCount = turn.images.filter((image) => image.status === "loading").length;
   const failedCount = turn.images.filter((image) => image.status === "error").length;
@@ -631,7 +725,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       setImageCount(storedCount ? clampImageCount(storedCount) : "1");
 
       const items = await listImageConversations();
-      const normalizedItems = await recoverConversationHistory(items);
+      const normalizedItems = await recoverConversationsFromTasks(await recoverConversationHistory(items));
       if (loadCancelledRef.current) {
         return;
       }

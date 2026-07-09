@@ -47,6 +47,18 @@ function parseGenerationLimit(value: string) {
   return Math.max(0, Math.floor(parsed));
 }
 
+function parseExpiryDays(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(parsed));
+}
+
 export function UserKeysCard() {
   const didLoadRef = useRef(false);
   const [items, setItems] = useState<UserKey[]>([]);
@@ -54,6 +66,7 @@ export function UserKeysCard() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [generationLimit, setGenerationLimit] = useState("");
+  const [expiryDays, setExpiryDays] = useState("30");
   const [isCreating, setIsCreating] = useState(false);
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
   const [revealedKey, setRevealedKey] = useState("");
@@ -62,6 +75,7 @@ export function UserKeysCard() {
   const [editName, setEditName] = useState("");
   const [editKey, setEditKey] = useState("");
   const [editGenerationLimit, setEditGenerationLimit] = useState("");
+  const [editExpiryDays, setEditExpiryDays] = useState("");
 
   const load = async () => {
     setIsLoading(true);
@@ -86,11 +100,12 @@ export function UserKeysCard() {
   const handleCreate = async () => {
     setIsCreating(true);
     try {
-      const data = await createUserKey(name.trim(), parseGenerationLimit(generationLimit));
+      const data = await createUserKey(name.trim(), parseGenerationLimit(generationLimit), parseExpiryDays(expiryDays));
       setItems(data.items);
       setRevealedKey(data.key);
       setName("");
       setGenerationLimit("");
+      setExpiryDays("30");
       setIsDialogOpen(false);
       toast.success("用户密钥已创建");
     } catch (error) {
@@ -148,6 +163,7 @@ export function UserKeysCard() {
     setEditName(item.name);
     setEditKey("");
     setEditGenerationLimit(item.generation_limit < 0 ? "" : String(item.generation_limit));
+    setEditExpiryDays("");
   };
 
   const handleEdit = async () => {
@@ -158,7 +174,13 @@ export function UserKeysCard() {
     const trimmedName = editName.trim();
     const trimmedKey = editKey.trim();
     const nextGenerationLimit = parseGenerationLimit(editGenerationLimit);
-    if (trimmedName === item.name && !trimmedKey && nextGenerationLimit === item.generation_limit) {
+    const nextExpiryDays = parseExpiryDays(editExpiryDays);
+    if (
+      trimmedName === item.name &&
+      !trimmedKey &&
+      nextGenerationLimit === item.generation_limit &&
+      !editExpiryDays.trim()
+    ) {
       setEditingItem(null);
       return;
     }
@@ -168,10 +190,12 @@ export function UserKeysCard() {
         ...(trimmedName !== item.name ? { name: trimmedName } : {}),
         ...(trimmedKey ? { key: trimmedKey } : {}),
         ...(nextGenerationLimit !== item.generation_limit ? { generation_limit: nextGenerationLimit } : {}),
+        ...(editExpiryDays.trim() ? { expires_in_days: nextExpiryDays } : {}),
       });
       setItems(data.items);
       setEditingItem(null);
       setEditKey("");
+      setEditExpiryDays("");
       toast.success("用户密钥已更新");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "更新用户密钥失败");
@@ -185,6 +209,13 @@ export function UserKeysCard() {
       return `已用 ${item.generation_used} / 不限`;
     }
     return `已用 ${item.generation_used} / ${item.generation_limit}，剩余 ${item.generation_remaining ?? 0}`;
+  };
+
+  const formatExpiry = (item: UserKey) => {
+    if (!item.expires_at) {
+      return "不限时";
+    }
+    return item.expired ? `已过期 ${formatDateTime(item.expires_at)}` : `到期 ${formatDateTime(item.expires_at)}`;
   };
 
   const handleCopy = async (value: string) => {
@@ -252,12 +283,13 @@ export function UserKeysCard() {
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="truncate text-sm font-medium text-stone-800">{item.name}</div>
                         <Badge variant={item.enabled ? "success" : "secondary"} className="rounded-md">
-                          {item.enabled ? "已启用" : "已禁用"}
+                          {item.expired ? "已过期" : item.enabled ? "已启用" : "已禁用"}
                         </Badge>
                       </div>
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
                         <span>创建时间 {formatDateTime(item.created_at)}</span>
                         <span>最近使用 {formatDateTime(item.last_used_at)}</span>
+                        <span>{formatExpiry(item)}</span>
                         <span>生成次数 {formatGenerationLimit(item)}</span>
                       </div>
                     </div>
@@ -278,7 +310,8 @@ export function UserKeysCard() {
                         variant="outline"
                         className="h-9 rounded-xl border-stone-200 bg-white px-4 text-stone-700"
                         onClick={() => void handleToggle(item)}
-                        disabled={isPending}
+                        disabled={isPending || Boolean(item.expired)}
+                        title={item.expired ? "过期密钥需要编辑有效期后再启用" : undefined}
                       >
                         {isPending ? (
                           <LoaderCircle className="size-4 animate-spin" />
@@ -336,6 +369,18 @@ export function UserKeysCard() {
               className="h-11 rounded-xl border-stone-200 bg-white"
             />
             <p className="text-xs leading-5 text-stone-500">填写正整数限制可成功生成的图片次数；留空表示不限次数。</p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">有效期（天）</label>
+            <Input
+              type="number"
+              min={0}
+              value={expiryDays}
+              onChange={(event) => setExpiryDays(event.target.value)}
+              placeholder="例如：1 或 30；留空表示不限时"
+              className="h-11 rounded-xl border-stone-200 bg-white"
+            />
+            <p className="text-xs leading-5 text-stone-500">默认 30 天；填写 1 表示 1 天后自动禁用，填写 0 或留空表示不限时。</p>
           </div>
           <DialogFooter>
             <Button
@@ -397,6 +442,7 @@ export function UserKeysCard() {
           if (!open) {
             setEditingItem(null);
             setEditKey("");
+            setEditExpiryDays("");
           }
         }}
       >
@@ -443,6 +489,20 @@ export function UserKeysCard() {
                 当前已用 {editingItem?.generation_used ?? 0} 次；保存更小的上限时，已用次数会被压到新上限。
               </p>
             </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">重新设置有效期（天，可选）</label>
+              <Input
+                type="number"
+                min={0}
+                value={editExpiryDays}
+                onChange={(event) => setEditExpiryDays(event.target.value)}
+                placeholder="留空保持当前到期时间；例如：1 或 30"
+                className="h-11 rounded-xl border-stone-200 bg-white"
+              />
+              <p className="text-xs leading-5 text-stone-500">
+                当前{editingItem ? formatExpiry(editingItem) : "不限时"}；填写天数会从现在开始重新计算，0 表示取消时效。
+              </p>
+            </div>
           </div>
           <DialogFooter>
             <Button
@@ -452,6 +512,7 @@ export function UserKeysCard() {
               onClick={() => {
                 setEditingItem(null);
                 setEditKey("");
+                setEditExpiryDays("");
               }}
               disabled={editingItem ? pendingIds.has(editingItem.id) : false}
             >

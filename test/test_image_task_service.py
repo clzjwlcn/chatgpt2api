@@ -64,7 +64,9 @@ class ImageTaskServiceTests(unittest.TestCase):
 
             self.assertEqual(first["id"], "task-1")
             self.assertEqual(second["id"], "task-1")
+            self.assertEqual(first["prompt"], "cat")
             task = wait_for_task(service, OWNER, "task-1", "success")
+            self.assertEqual(task["prompt"], "cat")
             self.assertEqual(task["data"][0]["url"], "http://example.test/image.png")
             self.assertEqual(calls, 1)
 
@@ -105,6 +107,7 @@ class ImageTaskServiceTests(unittest.TestCase):
 
             self.assertEqual(result["missing_ids"], [])
             self.assertEqual(result["items"][0]["status"], "success")
+            self.assertEqual(result["items"][0]["prompt"], "cat")
             self.assertEqual(result["items"][0]["data"][0]["url"], "http://example.test/image.png")
 
     def test_startup_marks_unfinished_tasks_as_error(self):

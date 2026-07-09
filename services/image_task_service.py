@@ -75,6 +75,8 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
     }
     if task.get("conversation_id"):
         item["conversation_id"] = task.get("conversation_id")
+    if task.get("prompt"):
+        item["prompt"] = task.get("prompt")
     if task.get("data") is not None:
         item["data"] = task.get("data")
     if task.get("usage") is not None:
@@ -229,6 +231,7 @@ class ImageTaskService:
                 "status": TASK_STATUS_QUEUED,
                 "mode": mode,
                 "model": _clean(payload.get("model"), "gpt-image-2"),
+                "prompt": _clean(payload.get("prompt")),
                 "size": _clean(payload.get("size")),
                 "quality": _clean(payload.get("quality"), "auto"),
                 "created_at": now,
@@ -400,6 +403,7 @@ class ImageTaskService:
                 "status": status,
                 "mode": "edit" if item.get("mode") == "edit" else "generate",
                 "model": _clean(item.get("model"), "gpt-image-2"),
+                "prompt": _clean(item.get("prompt")),
                 "size": _clean(item.get("size")),
                 "quality": _clean(item.get("quality"), "auto"),
                 "created_at": _clean(item.get("created_at"), _now_iso()),
