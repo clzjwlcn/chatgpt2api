@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import tempfile
 import time
 import unittest
@@ -155,6 +156,55 @@ class ImageTaskServiceTests(unittest.TestCase):
                         size=None,
                         base_url="http://local.test",
                     )
+
+    def test_third_task_waits_in_queue_until_slot_is_free(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            started: list[str] = []
+            release_first_two = threading.Event()
+
+            def handler(payload):
+                prompt = str(payload.get("prompt") or "")
+                started.append(prompt)
+                if prompt in {"cat", "dog"}:
+                    release_first_two.wait(timeout=2)
+                return {"data": [{"url": f"http://example.test/{prompt}.png"}]}
+
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json", handler)
+            service.submit_generation(
+                OWNER,
+                client_task_id="queue-1",
+                prompt="cat",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+            )
+            service.submit_generation(
+                OWNER,
+                client_task_id="queue-2",
+                prompt="dog",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+            )
+            third = service.submit_generation(
+                OWNER,
+                client_task_id="queue-3",
+                prompt="bird",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+            )
+
+            time.sleep(0.1)
+            queued = service.list_tasks(OWNER, ["queue-3"])["items"][0]
+            self.assertEqual(third["status"], "queued")
+            self.assertEqual(queued["status"], "queued")
+            self.assertCountEqual(started, ["cat", "dog"])
+
+            release_first_two.set()
+            task = wait_for_task(service, OWNER, "queue-3", "success")
+            self.assertEqual(task["data"][0]["url"], "http://example.test/bird.png")
+            self.assertIn("bird", started)
 
     def test_startup_marks_unfinished_tasks_as_error(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -20,6 +20,7 @@ TASK_STATUS_SUCCESS = "success"
 TASK_STATUS_ERROR = "error"
 TERMINAL_STATUSES = {TASK_STATUS_SUCCESS, TASK_STATUS_ERROR}
 UNFINISHED_STATUSES = {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING}
+DEFAULT_MAX_RUNNING_IMAGE_TASKS = 2
 
 
 def _now_iso() -> str:
@@ -130,13 +131,16 @@ class ImageTaskService:
         generation_handler: Callable[[dict[str, Any]], dict[str, Any]] = openai_v1_image_generations.handle,
         edit_handler: Callable[[dict[str, Any]], dict[str, Any]] = openai_v1_image_edit.handle,
         retention_days_getter: Callable[[], int] | None = None,
+        max_running_tasks: int = DEFAULT_MAX_RUNNING_IMAGE_TASKS,
     ):
         self.path = path
         self.generation_handler = generation_handler
         self.edit_handler = edit_handler
         self.retention_days_getter = retention_days_getter or (lambda: config.image_retention_days)
+        self.max_running_tasks = max(1, int(max_running_tasks or DEFAULT_MAX_RUNNING_IMAGE_TASKS))
         self._lock = threading.RLock()
         self._tasks: dict[str, dict[str, Any]] = {}
+        self._runtime_jobs: dict[str, dict[str, Any]] = {}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             self._tasks = self._load_locked()
@@ -253,7 +257,7 @@ class ImageTaskService:
         owner = _owner_id(identity)
         key = _task_key(owner, task_id)
         now = _now_iso()
-        should_start = False
+        jobs_to_start: list[tuple[str, str, dict[str, Any], dict[str, object], str]] = []
         with self._lock:
             cleaned = self._cleanup_locked()
             task = self._tasks.get(key)
@@ -284,18 +288,57 @@ class ImageTaskService:
             except ValueError as exc:
                 raise ValueError(str(exc)) from exc
             self._tasks[key] = task
+            self._runtime_jobs[key] = {
+                "mode": mode,
+                "payload": payload,
+                "identity": dict(identity),
+                "model": _clean(payload.get("model"), "gpt-image-2"),
+            }
             self._save_locked()
-            should_start = True
+            jobs_to_start = self._start_queued_tasks_locked()
 
-        if should_start:
+        self._start_job_threads(jobs_to_start)
+        return _public_task(task)
+
+    def _start_queued_tasks_locked(self) -> list[tuple[str, str, dict[str, Any], dict[str, object], str]]:
+        running_count = sum(1 for task in self._tasks.values() if task.get("status") == TASK_STATUS_RUNNING)
+        available_slots = max(0, self.max_running_tasks - running_count)
+        if available_slots <= 0:
+            return []
+        queued_keys = [
+            key
+            for key, task in sorted(
+                self._tasks.items(),
+                key=lambda item: float(item[1].get("created_ts") or 0),
+            )
+            if task.get("status") == TASK_STATUS_QUEUED and key in self._runtime_jobs
+        ][:available_slots]
+        jobs: list[tuple[str, str, dict[str, Any], dict[str, object], str]] = []
+        now = _now_iso()
+        for key in queued_keys:
+            task = self._tasks.get(key)
+            job = self._runtime_jobs.get(key)
+            if not task or not job:
+                continue
+            task["status"] = TASK_STATUS_RUNNING
+            task["error"] = ""
+            task["updated_at"] = now
+            task["updated_ts"] = time.time()
+            jobs.append((key, job["mode"], job["payload"], job["identity"], job["model"]))
+        if jobs:
+            self._save_locked()
+        return jobs
+
+    def _start_job_threads(self, jobs: list[tuple[str, str, dict[str, Any], dict[str, object], str]]) -> None:
+        for key, mode, payload, identity, model in jobs:
+            task_id = key.rsplit(":", 1)[-1]
             thread = threading.Thread(
                 target=self._run_task,
-                args=(key, mode, payload, dict(identity), _clean(payload.get("model"), "gpt-image-2")),
+                args=(key, mode, payload, identity, model),
                 name=f"image-task-{task_id[:16]}",
                 daemon=True,
             )
             thread.start()
-        return _public_task(task)
 
     def _run_task(
         self,
@@ -364,6 +407,11 @@ class ImageTaskService:
                 error=error_message,
                 account_email=account_email,
             )
+        finally:
+            with self._lock:
+                self._runtime_jobs.pop(key, None)
+                jobs_to_start = self._start_queued_tasks_locked()
+            self._start_job_threads(jobs_to_start)
 
     def _log_call(
         self,
