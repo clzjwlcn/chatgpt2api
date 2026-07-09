@@ -333,6 +333,10 @@ export type AuthProfile = {
   generation_limit: number;
   generation_used: number;
   generation_remaining: number | null;
+  daily_generation_limit: number;
+  daily_generation_used: number;
+  daily_generation_remaining: number | null;
+  daily_generation_date?: string | null;
 };
 
 export type UserKey = {
@@ -347,6 +351,10 @@ export type UserKey = {
   generation_limit: number;
   generation_used: number;
   generation_remaining: number | null;
+  daily_generation_limit: number;
+  daily_generation_used: number;
+  daily_generation_remaining: number | null;
+  daily_generation_date?: string | null;
 };
 
 export type OutlookPoolStats = {
@@ -762,16 +770,28 @@ export async function fetchUserKeys() {
   return httpRequest<{ items: UserKey[] }>("/api/auth/users");
 }
 
-export async function createUserKey(name: string, generationLimit = -1, expiresInDays = 0) {
+export async function createUserKey(name: string, generationLimit = -1, expiresInDays = 0, dailyGenerationLimit = -1) {
   return httpRequest<{ item: UserKey; key: string; items: UserKey[] }>("/api/auth/users", {
     method: "POST",
-    body: { name, generation_limit: generationLimit, expires_in_days: expiresInDays },
+    body: {
+      name,
+      generation_limit: generationLimit,
+      expires_in_days: expiresInDays,
+      daily_generation_limit: dailyGenerationLimit,
+    },
   });
 }
 
 export async function updateUserKey(
   keyId: string,
-  updates: { enabled?: boolean; name?: string; key?: string; generation_limit?: number; expires_in_days?: number },
+  updates: {
+    enabled?: boolean;
+    name?: string;
+    key?: string;
+    generation_limit?: number;
+    daily_generation_limit?: number;
+    expires_in_days?: number;
+  },
 ) {
   return httpRequest<{ item: UserKey; items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "POST",

@@ -66,6 +66,7 @@ export function UserKeysCard() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [generationLimit, setGenerationLimit] = useState("");
+  const [dailyGenerationLimit, setDailyGenerationLimit] = useState("");
   const [expiryDays, setExpiryDays] = useState("30");
   const [isCreating, setIsCreating] = useState(false);
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
@@ -75,6 +76,7 @@ export function UserKeysCard() {
   const [editName, setEditName] = useState("");
   const [editKey, setEditKey] = useState("");
   const [editGenerationLimit, setEditGenerationLimit] = useState("");
+  const [editDailyGenerationLimit, setEditDailyGenerationLimit] = useState("");
   const [editExpiryDays, setEditExpiryDays] = useState("");
 
   const load = async () => {
@@ -100,11 +102,17 @@ export function UserKeysCard() {
   const handleCreate = async () => {
     setIsCreating(true);
     try {
-      const data = await createUserKey(name.trim(), parseGenerationLimit(generationLimit), parseExpiryDays(expiryDays));
+      const data = await createUserKey(
+        name.trim(),
+        parseGenerationLimit(generationLimit),
+        parseExpiryDays(expiryDays),
+        parseGenerationLimit(dailyGenerationLimit),
+      );
       setItems(data.items);
       setRevealedKey(data.key);
       setName("");
       setGenerationLimit("");
+      setDailyGenerationLimit("");
       setExpiryDays("30");
       setIsDialogOpen(false);
       toast.success("用户密钥已创建");
@@ -163,6 +171,7 @@ export function UserKeysCard() {
     setEditName(item.name);
     setEditKey("");
     setEditGenerationLimit(item.generation_limit < 0 ? "" : String(item.generation_limit));
+    setEditDailyGenerationLimit(item.daily_generation_limit < 0 ? "" : String(item.daily_generation_limit));
     setEditExpiryDays("");
   };
 
@@ -174,11 +183,13 @@ export function UserKeysCard() {
     const trimmedName = editName.trim();
     const trimmedKey = editKey.trim();
     const nextGenerationLimit = parseGenerationLimit(editGenerationLimit);
+    const nextDailyGenerationLimit = parseGenerationLimit(editDailyGenerationLimit);
     const nextExpiryDays = parseExpiryDays(editExpiryDays);
     if (
       trimmedName === item.name &&
       !trimmedKey &&
       nextGenerationLimit === item.generation_limit &&
+      nextDailyGenerationLimit === item.daily_generation_limit &&
       !editExpiryDays.trim()
     ) {
       setEditingItem(null);
@@ -190,11 +201,15 @@ export function UserKeysCard() {
         ...(trimmedName !== item.name ? { name: trimmedName } : {}),
         ...(trimmedKey ? { key: trimmedKey } : {}),
         ...(nextGenerationLimit !== item.generation_limit ? { generation_limit: nextGenerationLimit } : {}),
+        ...(nextDailyGenerationLimit !== item.daily_generation_limit
+          ? { daily_generation_limit: nextDailyGenerationLimit }
+          : {}),
         ...(editExpiryDays.trim() ? { expires_in_days: nextExpiryDays } : {}),
       });
       setItems(data.items);
       setEditingItem(null);
       setEditKey("");
+      setEditDailyGenerationLimit("");
       setEditExpiryDays("");
       toast.success("用户密钥已更新");
     } catch (error) {
@@ -209,6 +224,13 @@ export function UserKeysCard() {
       return `已用 ${item.generation_used} / 不限`;
     }
     return `已用 ${item.generation_used} / ${item.generation_limit}，剩余 ${item.generation_remaining ?? 0}`;
+  };
+
+  const formatDailyGenerationLimit = (item: UserKey) => {
+    if (item.daily_generation_limit < 0) {
+      return `今日已用 ${item.daily_generation_used} / 不限`;
+    }
+    return `今日已用 ${item.daily_generation_used} / ${item.daily_generation_limit}，剩余 ${item.daily_generation_remaining ?? 0}`;
   };
 
   const formatExpiry = (item: UserKey) => {
@@ -291,6 +313,7 @@ export function UserKeysCard() {
                         <span>最近使用 {formatDateTime(item.last_used_at)}</span>
                         <span>{formatExpiry(item)}</span>
                         <span>生成次数 {formatGenerationLimit(item)}</span>
+                        <span>每日限制 {formatDailyGenerationLimit(item)}</span>
                       </div>
                     </div>
 
@@ -371,6 +394,18 @@ export function UserKeysCard() {
             <p className="text-xs leading-5 text-stone-500">填写正整数限制可成功生成的图片次数；留空表示不限次数。</p>
           </div>
           <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">每日生图限制</label>
+            <Input
+              type="number"
+              min={0}
+              value={dailyGenerationLimit}
+              onChange={(event) => setDailyGenerationLimit(event.target.value)}
+              placeholder="例如：10；留空表示每天不限次数"
+              className="h-11 rounded-xl border-stone-200 bg-white"
+            />
+            <p className="text-xs leading-5 text-stone-500">按服务器日期每天自动清零；留空表示不限制每日次数。</p>
+          </div>
+          <div className="space-y-2">
             <label className="text-sm font-medium text-stone-700">有效期（天）</label>
             <Input
               type="number"
@@ -442,6 +477,7 @@ export function UserKeysCard() {
           if (!open) {
             setEditingItem(null);
             setEditKey("");
+            setEditDailyGenerationLimit("");
             setEditExpiryDays("");
           }
         }}
@@ -490,6 +526,20 @@ export function UserKeysCard() {
               </p>
             </div>
             <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">每日生图限制</label>
+              <Input
+                type="number"
+                min={0}
+                value={editDailyGenerationLimit}
+                onChange={(event) => setEditDailyGenerationLimit(event.target.value)}
+                placeholder="留空表示每天不限次数"
+                className="h-11 rounded-xl border-stone-200 bg-white"
+              />
+              <p className="text-xs leading-5 text-stone-500">
+                今日已用 {editingItem?.daily_generation_used ?? 0} 次；跨天后会自动清零。
+              </p>
+            </div>
+            <div className="space-y-2">
               <label className="text-sm font-medium text-stone-700">重新设置有效期（天，可选）</label>
               <Input
                 type="number"
@@ -512,6 +562,7 @@ export function UserKeysCard() {
               onClick={() => {
                 setEditingItem(null);
                 setEditKey("");
+                setEditDailyGenerationLimit("");
                 setEditExpiryDays("");
               }}
               disabled={editingItem ? pendingIds.has(editingItem.id) : false}

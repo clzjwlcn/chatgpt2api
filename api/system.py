@@ -88,6 +88,10 @@ def create_router(app_version: str) -> APIRouter:
                 "generation_limit": latest.get("generation_limit"),
                 "generation_used": latest.get("generation_used"),
                 "generation_remaining": latest.get("generation_remaining"),
+                "daily_generation_limit": latest.get("daily_generation_limit"),
+                "daily_generation_used": latest.get("daily_generation_used"),
+                "daily_generation_remaining": latest.get("daily_generation_remaining"),
+                "daily_generation_date": latest.get("daily_generation_date"),
             }
         return {
             "id": identity.get("id"),
@@ -96,6 +100,10 @@ def create_router(app_version: str) -> APIRouter:
             "generation_limit": -1,
             "generation_used": 0,
             "generation_remaining": None,
+            "daily_generation_limit": -1,
+            "daily_generation_used": 0,
+            "daily_generation_remaining": None,
+            "daily_generation_date": None,
         }
 
     @router.get("/version")

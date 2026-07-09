@@ -19,6 +19,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _today_key() -> str:
+    return datetime.now().astimezone().date().isoformat()
+
+
 def _hash_key(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -54,6 +58,10 @@ class AuthService:
             return max(0, int(value))
         except (OverflowError, TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _normalize_daily_generation_limit(value: object) -> int:
+        return AuthService._normalize_generation_limit(value)
 
     @staticmethod
     def _normalize_expires_in_days(value: object) -> int:
@@ -106,6 +114,9 @@ class AuthService:
         expires_at = self._clean(raw.get("expires_at")) or None
         generation_limit = self._normalize_generation_limit(raw.get("generation_limit"))
         generation_used = self._normalize_generation_used(raw.get("generation_used"))
+        daily_generation_limit = self._normalize_daily_generation_limit(raw.get("daily_generation_limit"))
+        daily_generation_used = self._normalize_generation_used(raw.get("daily_generation_used"))
+        daily_generation_date = self._clean(raw.get("daily_generation_date")) or _today_key()
         return {
             "id": item_id,
             "name": name,
@@ -117,6 +128,9 @@ class AuthService:
             "expires_at": expires_at,
             "generation_limit": generation_limit,
             "generation_used": generation_used,
+            "daily_generation_limit": daily_generation_limit,
+            "daily_generation_used": daily_generation_used,
+            "daily_generation_date": daily_generation_date,
         }
 
     def _load(self) -> list[dict[str, object]]:
@@ -147,11 +161,35 @@ class AuthService:
             self._save()
         return changed
 
+    def _reset_daily_usage_locked(self) -> bool:
+        today = _today_key()
+        changed = False
+        for index, item in enumerate(self._items):
+            if item.get("role") != "user":
+                continue
+            if self._clean(item.get("daily_generation_date")) == today:
+                continue
+            next_item = dict(item)
+            next_item["daily_generation_date"] = today
+            next_item["daily_generation_used"] = 0
+            self._items[index] = next_item
+            changed = True
+        if changed:
+            self._save()
+        return changed
+
     @staticmethod
     def _public_item(item: dict[str, object]) -> dict[str, object]:
         generation_limit = AuthService._normalize_generation_limit(item.get("generation_limit"))
         generation_used = AuthService._normalize_generation_used(item.get("generation_used"))
         generation_remaining = None if generation_limit < 0 else max(0, generation_limit - generation_used)
+        daily_generation_limit = AuthService._normalize_daily_generation_limit(item.get("daily_generation_limit"))
+        daily_generation_used = AuthService._normalize_generation_used(item.get("daily_generation_used"))
+        if str(item.get("daily_generation_date") or "") != _today_key():
+            daily_generation_used = 0
+        daily_generation_remaining = (
+            None if daily_generation_limit < 0 else max(0, daily_generation_limit - daily_generation_used)
+        )
         return {
             "id": item.get("id"),
             "name": item.get("name"),
@@ -164,12 +202,17 @@ class AuthService:
             "generation_limit": generation_limit,
             "generation_used": generation_used,
             "generation_remaining": generation_remaining,
+            "daily_generation_limit": daily_generation_limit,
+            "daily_generation_used": daily_generation_used,
+            "daily_generation_remaining": daily_generation_remaining,
+            "daily_generation_date": item.get("daily_generation_date") or _today_key(),
         }
 
     def list_keys(self, role: AuthRole | None = None) -> list[dict[str, object]]:
         with self._lock:
             self._reload_locked()
             self._disable_expired_locked()
+            self._reset_daily_usage_locked()
             items = [item for item in self._items if role is None or item.get("role") == role]
             return [self._public_item(item) for item in items]
 
@@ -180,6 +223,7 @@ class AuthService:
         with self._lock:
             self._reload_locked()
             self._disable_expired_locked()
+            self._reset_daily_usage_locked()
             for item in self._items:
                 if item.get("id") == normalized_id and (role is None or item.get("role") == role):
                     return self._public_item(item)
@@ -246,6 +290,7 @@ class AuthService:
         role: AuthRole,
         name: str = "",
         generation_limit: int = UNLIMITED_GENERATION_LIMIT,
+        daily_generation_limit: int = UNLIMITED_GENERATION_LIMIT,
         expires_in_days: int = 0,
     ) -> tuple[dict[str, object], str]:
         with self._lock:
@@ -269,6 +314,9 @@ class AuthService:
                 "expires_at": self._expires_at_from_days(expires_in_days),
                 "generation_limit": self._normalize_generation_limit(generation_limit),
                 "generation_used": 0,
+                "daily_generation_limit": self._normalize_daily_generation_limit(daily_generation_limit),
+                "daily_generation_used": 0,
+                "daily_generation_date": _today_key(),
             }
             self._items.append(item)
             self._save()
@@ -286,6 +334,8 @@ class AuthService:
             return None
         with self._lock:
             self._reload_locked()
+            self._disable_expired_locked()
+            self._reset_daily_usage_locked()
             for index, item in enumerate(self._items):
                 if item.get("id") != normalized_id:
                     continue
@@ -310,6 +360,15 @@ class AuthService:
                         next_item["generation_used"] = min(
                             self._normalize_generation_used(next_item.get("generation_used")),
                             next_limit,
+                        )
+                if "daily_generation_limit" in updates and updates.get("daily_generation_limit") is not None:
+                    next_daily_limit = self._normalize_daily_generation_limit(updates.get("daily_generation_limit"))
+                    next_item["daily_generation_limit"] = next_daily_limit
+                    next_item["daily_generation_date"] = _today_key()
+                    if next_daily_limit >= 0:
+                        next_item["daily_generation_used"] = min(
+                            self._normalize_generation_used(next_item.get("daily_generation_used")),
+                            next_daily_limit,
                         )
                 if "expires_in_days" in updates and updates.get("expires_in_days") is not None:
                     next_item["expires_at"] = self._expires_at_from_days(updates.get("expires_in_days"))
@@ -345,6 +404,7 @@ class AuthService:
         with self._lock:
             self._reload_locked()
             self._disable_expired_locked()
+            self._reset_daily_usage_locked()
             for index, item in enumerate(self._items):
                 if not bool(item.get("enabled", True)):
                     continue
@@ -376,17 +436,20 @@ class AuthService:
         with self._lock:
             self._reload_locked()
             self._disable_expired_locked()
+            self._reset_daily_usage_locked()
             for item in self._items:
                 if item.get("id") != key_id or item.get("role") != "user":
                     continue
                 if not bool(item.get("enabled", True)):
                     raise ValueError("用户密钥已被禁用")
                 limit = self._normalize_generation_limit(item.get("generation_limit"))
-                if limit < 0:
-                    return
                 used = self._normalize_generation_used(item.get("generation_used"))
-                if used + amount > limit:
+                if limit >= 0 and used + amount > limit:
                     raise ValueError("生成次数已用完，请联系管理员增加次数")
+                daily_limit = self._normalize_daily_generation_limit(item.get("daily_generation_limit"))
+                daily_used = self._normalize_generation_used(item.get("daily_generation_used"))
+                if daily_limit >= 0 and daily_used + amount > daily_limit:
+                    raise ValueError("今日生成次数已用完，请明天再试或联系管理员增加次数")
                 return
         raise ValueError("用户密钥不存在或已失效")
 
@@ -400,17 +463,24 @@ class AuthService:
         with self._lock:
             self._reload_locked()
             self._disable_expired_locked()
+            self._reset_daily_usage_locked()
             for index, item in enumerate(self._items):
                 if item.get("id") != key_id or item.get("role") != "user":
                     continue
                 if not bool(item.get("enabled", True)):
                     return None
                 limit = self._normalize_generation_limit(item.get("generation_limit"))
-                if limit < 0:
-                    return self._public_item(item)
                 used = self._normalize_generation_used(item.get("generation_used"))
+                daily_limit = self._normalize_daily_generation_limit(item.get("daily_generation_limit"))
+                daily_used = self._normalize_generation_used(item.get("daily_generation_used"))
                 next_item = dict(item)
-                next_item["generation_used"] = min(limit, used + amount)
+                if limit >= 0:
+                    next_item["generation_used"] = min(limit, used + amount)
+                if daily_limit >= 0:
+                    next_item["daily_generation_used"] = min(daily_limit, daily_used + amount)
+                    next_item["daily_generation_date"] = _today_key()
+                if limit < 0 and daily_limit < 0:
+                    return self._public_item(item)
                 self._items[index] = next_item
                 self._save()
                 return self._public_item(next_item)
@@ -426,19 +496,28 @@ class AuthService:
         with self._lock:
             self._reload_locked()
             self._disable_expired_locked()
+            self._reset_daily_usage_locked()
             for index, item in enumerate(self._items):
                 if item.get("id") != key_id or item.get("role") != "user":
                     continue
                 if not bool(item.get("enabled", True)):
                     raise ValueError("用户密钥已被禁用")
                 limit = self._normalize_generation_limit(item.get("generation_limit"))
-                if limit < 0:
-                    return self._public_item(item)
                 used = self._normalize_generation_used(item.get("generation_used"))
-                if used + amount > limit:
+                if limit >= 0 and used + amount > limit:
                     raise ValueError("生成次数已用完，请联系管理员增加次数")
+                daily_limit = self._normalize_daily_generation_limit(item.get("daily_generation_limit"))
+                daily_used = self._normalize_generation_used(item.get("daily_generation_used"))
+                if daily_limit >= 0 and daily_used + amount > daily_limit:
+                    raise ValueError("今日生成次数已用完，请明天再试或联系管理员增加次数")
+                if limit < 0 and daily_limit < 0:
+                    return self._public_item(item)
                 next_item = dict(item)
-                next_item["generation_used"] = used + amount
+                if limit >= 0:
+                    next_item["generation_used"] = used + amount
+                if daily_limit >= 0:
+                    next_item["daily_generation_used"] = daily_used + amount
+                    next_item["daily_generation_date"] = _today_key()
                 self._items[index] = next_item
                 self._save()
                 return self._public_item(next_item)
@@ -451,12 +530,16 @@ class AuthService:
         amount = max(1, int(amount or 1))
         with self._lock:
             self._reload_locked()
+            self._reset_daily_usage_locked()
             for index, item in enumerate(self._items):
                 if item.get("id") != normalized_id or item.get("role") != "user":
                     continue
                 used = self._normalize_generation_used(item.get("generation_used"))
+                daily_used = self._normalize_generation_used(item.get("daily_generation_used"))
                 next_item = dict(item)
                 next_item["generation_used"] = max(0, used - amount)
+                next_item["daily_generation_used"] = max(0, daily_used - amount)
+                next_item["daily_generation_date"] = _today_key()
                 self._items[index] = next_item
                 self._save()
                 return self._public_item(next_item)
