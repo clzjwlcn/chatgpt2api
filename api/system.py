@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 from api.support import require_admin, require_identity, resolve_image_base_url
 from services.auth_service import auth_service
+from services.image_task_service import image_task_service
 from services.backup_service import BackupError, backup_service
 from services.config import config
 from services.image_service import (
@@ -78,6 +79,7 @@ def create_router(app_version: str) -> APIRouter:
         identity = require_identity(authorization)
         if identity.get("role") == "user":
             latest = auth_service.get_key(str(identity.get("id") or ""), role="user") or identity
+            daily_usage = image_task_service.daily_generation_usage(latest)
             return {
                 "id": latest.get("id"),
                 "name": latest.get("name"),
@@ -88,10 +90,10 @@ def create_router(app_version: str) -> APIRouter:
                 "generation_limit": latest.get("generation_limit"),
                 "generation_used": latest.get("generation_used"),
                 "generation_remaining": latest.get("generation_remaining"),
-                "daily_generation_limit": latest.get("daily_generation_limit"),
-                "daily_generation_used": latest.get("daily_generation_used"),
-                "daily_generation_remaining": latest.get("daily_generation_remaining"),
-                "daily_generation_date": latest.get("daily_generation_date"),
+                "daily_generation_limit": daily_usage.get("daily_generation_limit"),
+                "daily_generation_used": daily_usage.get("daily_generation_used"),
+                "daily_generation_remaining": daily_usage.get("daily_generation_remaining"),
+                "daily_generation_date": daily_usage.get("daily_generation_date"),
             }
         return {
             "id": identity.get("id"),

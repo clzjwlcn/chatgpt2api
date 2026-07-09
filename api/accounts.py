@@ -15,6 +15,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from services.auth_service import auth_service
+from services.image_task_service import image_task_service
 
 from api.support import (
     require_admin,
@@ -166,10 +167,18 @@ def _account_zip_bytes(items: list[dict[str, str]]) -> bytes:
 def create_router() -> APIRouter:
     router = APIRouter()
 
+    def _with_daily_usage(item: dict[str, Any]) -> dict[str, Any]:
+        enriched = dict(item)
+        enriched.update(image_task_service.daily_generation_usage(enriched))
+        return enriched
+
+    def _with_daily_usage_list(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [_with_daily_usage(item) for item in items]
+
     @router.get("/api/auth/users")
     async def list_user_keys(authorization: str | None = Header(default=None)):
         require_admin(authorization)
-        return {"items": auth_service.list_keys(role="user")}
+        return {"items": _with_daily_usage_list(auth_service.list_keys(role="user"))}
 
     @router.post("/api/auth/users")
     async def create_user_key(body: UserKeyCreateRequest, authorization: str | None = Header(default=None)):
@@ -184,7 +193,7 @@ def create_router() -> APIRouter:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
-        return {"item": item, "key": raw_key, "items": auth_service.list_keys(role="user")}
+        return {"item": _with_daily_usage(item), "key": raw_key, "items": _with_daily_usage_list(auth_service.list_keys(role="user"))}
 
     @router.post("/api/auth/users/{key_id}")
     async def update_user_key(
@@ -213,14 +222,14 @@ def create_router() -> APIRouter:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         if item is None:
             raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
-        return {"item": item, "items": auth_service.list_keys(role="user")}
+        return {"item": _with_daily_usage(item), "items": _with_daily_usage_list(auth_service.list_keys(role="user"))}
 
     @router.delete("/api/auth/users/{key_id}")
     async def delete_user_key(key_id: str, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         if not auth_service.delete_key(key_id, role="user"):
             raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
-        return {"items": auth_service.list_keys(role="user")}
+        return {"items": _with_daily_usage_list(auth_service.list_keys(role="user"))}
 
     @router.get("/api/accounts")
     async def get_accounts(authorization: str | None = Header(default=None)):

@@ -26,6 +26,10 @@ def _now_iso() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _today_key() -> str:
+    return datetime.now().astimezone().date().isoformat()
+
+
 def _timestamp(value: object) -> float:
     if not isinstance(value, str) or not value.strip():
         return 0.0
@@ -106,6 +110,16 @@ def _reserved_quota_amount(task: dict[str, Any] | None) -> int:
         return max(0, int(task.get("generation_quota_reserved") or 0))
     except (OverflowError, TypeError, ValueError):
         return 0
+
+
+def _daily_generation_limit(identity: dict[str, object]) -> int:
+    if identity.get("role") == "admin":
+        return -1
+    try:
+        value = int(identity.get("daily_generation_limit") or -1)
+    except (OverflowError, TypeError, ValueError):
+        return -1
+    return value if value >= 0 else -1
 
 
 class ImageTaskService:
@@ -203,6 +217,28 @@ class ImageTaskService:
                 missing_ids = []
             return {"items": items, "missing_ids": missing_ids}
 
+    def daily_generation_usage(self, identity: dict[str, object]) -> dict[str, Any]:
+        owner = _owner_id(identity)
+        limit = _daily_generation_limit(identity)
+        today = _today_key()
+        with self._lock:
+            if self._cleanup_locked():
+                self._save_locked()
+            used = self._count_owner_tasks_on_day_locked(owner, today)
+        return {
+            "daily_generation_limit": limit,
+            "daily_generation_used": used,
+            "daily_generation_remaining": None if limit < 0 else max(0, limit - used),
+            "daily_generation_date": today,
+        }
+
+    def _count_owner_tasks_on_day_locked(self, owner: str, day: str) -> int:
+        return sum(
+            1
+            for task in self._tasks.values()
+            if task.get("owner_id") == owner and str(task.get("created_at") or "")[:10] == day
+        )
+
     def _submit(
         self,
         identity: dict[str, object],
@@ -225,6 +261,9 @@ class ImageTaskService:
                 if cleaned:
                     self._save_locked()
                 return _public_task(task)
+            daily_limit = _daily_generation_limit(identity)
+            if daily_limit >= 0 and self._count_owner_tasks_on_day_locked(owner, _today_key()) >= daily_limit:
+                raise ValueError("今日生成次数已用完，请明天再试或联系管理员增加次数")
             task = {
                 "id": task_id,
                 "owner_id": owner,

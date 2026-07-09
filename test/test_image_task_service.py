@@ -5,12 +5,14 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from services.image_task_service import ImageTaskService
 
 
 OWNER = {"id": "owner-1", "name": "Owner", "role": "admin"}
 OTHER_OWNER = {"id": "owner-2", "name": "Other", "role": "user"}
+LIMITED_OWNER = {"id": "owner-3", "name": "Limited", "role": "user", "daily_generation_limit": 2}
 
 
 def wait_for_task(service: ImageTaskService, identity: dict[str, object], task_id: str, status: str, timeout: float = 2.0):
@@ -109,6 +111,50 @@ class ImageTaskServiceTests(unittest.TestCase):
             self.assertEqual(result["items"][0]["status"], "success")
             self.assertEqual(result["items"][0]["prompt"], "cat")
             self.assertEqual(result["items"][0]["data"][0]["url"], "http://example.test/image.png")
+
+    def test_daily_generation_limit_uses_today_task_records(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json")
+
+            with mock.patch("services.image_task_service.auth_service.reserve_generation_quota", return_value=None):
+                service.submit_generation(
+                    LIMITED_OWNER,
+                    client_task_id="daily-1",
+                    prompt="cat",
+                    model="gpt-image-2",
+                    size=None,
+                    base_url="http://local.test",
+                )
+                duplicate = service.submit_generation(
+                    LIMITED_OWNER,
+                    client_task_id="daily-1",
+                    prompt="cat",
+                    model="gpt-image-2",
+                    size=None,
+                    base_url="http://local.test",
+                )
+                service.submit_generation(
+                    LIMITED_OWNER,
+                    client_task_id="daily-2",
+                    prompt="dog",
+                    model="gpt-image-2",
+                    size=None,
+                    base_url="http://local.test",
+                )
+
+                self.assertEqual(duplicate["id"], "daily-1")
+                usage = service.daily_generation_usage(LIMITED_OWNER)
+                self.assertEqual(usage["daily_generation_used"], 2)
+                self.assertEqual(usage["daily_generation_remaining"], 0)
+                with self.assertRaisesRegex(ValueError, "今日生成次数已用完"):
+                    service.submit_generation(
+                        LIMITED_OWNER,
+                        client_task_id="daily-3",
+                        prompt="bird",
+                        model="gpt-image-2",
+                        size=None,
+                        base_url="http://local.test",
+                    )
 
     def test_startup_marks_unfinished_tasks_as_error(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

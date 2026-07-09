@@ -231,51 +231,19 @@ class AuthServiceTests(unittest.TestCase):
             self.assertTrue(listed[0]["expired"])
             self.assertIsNone(service.authenticate(raw_key))
 
-    def test_user_key_daily_generation_limit_blocks_after_quota(self) -> None:
+    def test_update_user_key_daily_generation_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
             item, _ = service.create_key(role="user", name="Alice", daily_generation_limit=2)
 
-            first = service.reserve_generation_quota(item)
-            second = service.reserve_generation_quota(item)
+            updated = service.update_key(item["id"], {"daily_generation_limit": 5}, role="user")
+            unlimited = service.update_key(item["id"], {"daily_generation_limit": -1}, role="user")
 
-            self.assertEqual(first["daily_generation_used"], 1)
-            self.assertEqual(second["daily_generation_used"], 2)
-            with self.assertRaisesRegex(ValueError, "今日生成次数已用完"):
-                service.reserve_generation_quota(item)
-
-    def test_user_key_daily_generation_limit_resets_on_new_day(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
-            service.create_key(role="user", name="Alice", daily_generation_limit=2)
-            with service._lock:
-                service._items[0]["daily_generation_date"] = "2000-01-01"
-                service._items[0]["daily_generation_used"] = 2
-                service._save()
-
-            listed = service.list_keys(role="user")
-
-            self.assertEqual(listed[0]["daily_generation_used"], 0)
-            self.assertEqual(listed[0]["daily_generation_date"], datetime.now().astimezone().date().isoformat())
-            self.assertEqual(listed[0]["daily_generation_remaining"], 2)
-
-    def test_user_key_daily_generation_refund_decrements_usage(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
-            item, _ = service.create_key(
-                role="user",
-                name="Alice",
-                generation_limit=3,
-                daily_generation_limit=2,
-            )
-
-            reserved = service.reserve_generation_quota(item)
-            refunded = service.refund_generation_quota_by_id(item["id"])
-
-            self.assertEqual(reserved["generation_used"], 1)
-            self.assertEqual(reserved["daily_generation_used"], 1)
-            self.assertEqual(refunded["generation_used"], 0)
-            self.assertEqual(refunded["daily_generation_used"], 0)
+            self.assertEqual(updated["daily_generation_limit"], 5)
+            self.assertEqual(updated["daily_generation_used"], 0)
+            self.assertEqual(updated["daily_generation_remaining"], 5)
+            self.assertEqual(unlimited["daily_generation_limit"], -1)
+            self.assertIsNone(unlimited["daily_generation_remaining"])
 
     def test_user_key_name_must_be_unique(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

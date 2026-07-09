@@ -185,11 +185,13 @@ export function UserKeysCard() {
     const nextGenerationLimit = parseGenerationLimit(editGenerationLimit);
     const nextDailyGenerationLimit = parseGenerationLimit(editDailyGenerationLimit);
     const nextExpiryDays = parseExpiryDays(editExpiryDays);
+    const currentDailyGenerationLimit =
+      typeof item.daily_generation_limit === "number" ? item.daily_generation_limit : -1;
     if (
       trimmedName === item.name &&
       !trimmedKey &&
       nextGenerationLimit === item.generation_limit &&
-      nextDailyGenerationLimit === item.daily_generation_limit &&
+      nextDailyGenerationLimit === currentDailyGenerationLimit &&
       !editExpiryDays.trim()
     ) {
       setEditingItem(null);
@@ -201,7 +203,7 @@ export function UserKeysCard() {
         ...(trimmedName !== item.name ? { name: trimmedName } : {}),
         ...(trimmedKey ? { key: trimmedKey } : {}),
         ...(nextGenerationLimit !== item.generation_limit ? { generation_limit: nextGenerationLimit } : {}),
-        ...(nextDailyGenerationLimit !== item.daily_generation_limit
+        ...(nextDailyGenerationLimit !== currentDailyGenerationLimit
           ? { daily_generation_limit: nextDailyGenerationLimit }
           : {}),
         ...(editExpiryDays.trim() ? { expires_in_days: nextExpiryDays } : {}),
