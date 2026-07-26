@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Ban, CheckCircle2, Copy, KeyRound, LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Ban, CheckCircle2, Copy, KeyRound, LoaderCircle, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -59,6 +59,24 @@ function parseExpiryDays(value: string) {
   return Math.max(0, Math.floor(parsed));
 }
 
+function parseCreateCount(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return 1;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+  return Math.max(1, Math.min(100, Math.floor(parsed)));
+}
+
+type RevealedUserKey = {
+  id: string;
+  name: string;
+  key: string;
+};
+
 export function UserKeysCard() {
   const didLoadRef = useRef(false);
   const [items, setItems] = useState<UserKey[]>([]);
@@ -68,9 +86,11 @@ export function UserKeysCard() {
   const [generationLimit, setGenerationLimit] = useState("");
   const [dailyGenerationLimit, setDailyGenerationLimit] = useState("");
   const [expiryDays, setExpiryDays] = useState("30");
+  const [createCount, setCreateCount] = useState("1");
+  const [searchQuery, setSearchQuery] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
-  const [revealedKey, setRevealedKey] = useState("");
+  const [revealedKeys, setRevealedKeys] = useState<RevealedUserKey[]>([]);
   const [deletingItem, setDeletingItem] = useState<UserKey | null>(null);
   const [editingItem, setEditingItem] = useState<UserKey | null>(null);
   const [editName, setEditName] = useState("");
@@ -107,15 +127,23 @@ export function UserKeysCard() {
         parseGenerationLimit(generationLimit),
         parseExpiryDays(expiryDays),
         parseGenerationLimit(dailyGenerationLimit),
+        parseCreateCount(createCount),
       );
       setItems(data.items);
-      setRevealedKey(data.key);
+      setRevealedKeys(
+        (data.keys || [{ item: data.item, key: data.key }]).map((entry) => ({
+          id: entry.item.id,
+          name: entry.item.name,
+          key: entry.key,
+        })),
+      );
       setName("");
       setGenerationLimit("");
       setDailyGenerationLimit("");
       setExpiryDays("30");
+      setCreateCount("1");
       setIsDialogOpen(false);
-      toast.success("用户密钥已创建");
+      toast.success(parseCreateCount(createCount) > 1 ? "用户密钥已批量创建" : "用户密钥已创建");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "创建用户密钥失败");
     } finally {
@@ -251,6 +279,31 @@ export function UserKeysCard() {
     }
   };
 
+  const revealedKeyText = revealedKeys.map((item) => `${item.name}\t${item.key}`).join("\n");
+
+  const filteredItems = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) {
+      return items;
+    }
+    return items.filter((item) => {
+      const haystack = [
+        item.id,
+        item.name,
+        item.enabled ? "已启用" : "已禁用",
+        item.expired ? "已过期" : "",
+        formatDateTime(item.created_at),
+        formatDateTime(item.last_used_at),
+        formatExpiry(item),
+        formatGenerationLimit(item),
+        formatDailyGenerationLimit(item),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [items, searchQuery]);
+
   return (
     <>
       <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
@@ -271,23 +324,40 @@ export function UserKeysCard() {
             </Button>
           </div>
 
-          {revealedKey ? (
+          {revealedKeys.length ? (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-900">
-              <div className="font-medium">新密钥仅展示一次，请立即保存：</div>
-              <div className="mt-3 flex flex-col gap-3 rounded-lg border border-emerald-200 bg-white/80 p-3 md:flex-row md:items-center md:justify-between">
-                <code className="break-all font-mono text-[13px]">{revealedKey}</code>
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="font-medium">新密钥已显示，请立即保存：</div>
                 <Button
                   type="button"
                   variant="outline"
                   className="h-9 rounded-xl border-emerald-200 bg-white px-4 text-emerald-700"
-                  onClick={() => void handleCopy(revealedKey)}
+                  onClick={() => void handleCopy(revealedKeyText)}
                 >
                   <Copy className="size-4" />
-                  复制
+                  复制全部
                 </Button>
+              </div>
+              <div className="mt-3 max-h-72 overflow-auto rounded-lg border border-emerald-200 bg-white/80 p-3">
+                <pre className="whitespace-pre-wrap break-all font-mono text-[13px] leading-6">{revealedKeyText}</pre>
               </div>
             </div>
           ) : null}
+
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="relative w-full md:max-w-md">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-stone-400" />
+              <Input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="搜索名称、ID、状态或额度"
+                className="h-10 rounded-xl border-stone-200 bg-white pl-9"
+              />
+            </div>
+            <div className="text-xs text-stone-500">
+              共 {items.length} 条{searchQuery.trim() ? `，匹配 ${filteredItems.length} 条` : ""}
+            </div>
+          </div>
 
           {isLoading ? (
             <div className="flex items-center justify-center py-10">
@@ -297,9 +367,13 @@ export function UserKeysCard() {
             <div className="rounded-xl bg-stone-50 px-6 py-10 text-center text-sm text-stone-500">
               暂无普通用户密钥。点击右上角按钮后即可创建并分发给其他人。
             </div>
+          ) : filteredItems.length === 0 ? (
+            <div className="rounded-xl bg-stone-50 px-6 py-10 text-center text-sm text-stone-500">
+              没有找到匹配的用户密钥。
+            </div>
           ) : (
             <div className="space-y-3">
-              {items.map((item) => {
+              {filteredItems.map((item) => {
                 const isPending = pendingIds.has(item.id);
                 return (
                   <div key={item.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between">
@@ -382,6 +456,20 @@ export function UserKeysCard() {
               placeholder="例如：设计同学 A、运营临时账号"
               className="h-11 rounded-xl border-stone-200 bg-white"
             />
+            <p className="text-xs leading-5 text-stone-500">批量生成时会自动在名称后添加序号；留空则使用默认名称。</p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">生成数量</label>
+            <Input
+              type="number"
+              min={1}
+              max={100}
+              value={createCount}
+              onChange={(event) => setCreateCount(event.target.value)}
+              placeholder="例如：10"
+              className="h-11 rounded-xl border-stone-200 bg-white"
+            />
+            <p className="text-xs leading-5 text-stone-500">一次最多生成 100 个；生成后会批量显示，方便复制。</p>
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium text-stone-700">生成次数权限</label>
@@ -436,7 +524,7 @@ export function UserKeysCard() {
               disabled={isCreating}
             >
               {isCreating ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
-              创建
+              {parseCreateCount(createCount) > 1 ? `创建 ${parseCreateCount(createCount)} 个` : "创建"}
             </Button>
           </DialogFooter>
         </DialogContent>

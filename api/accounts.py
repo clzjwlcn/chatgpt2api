@@ -41,6 +41,7 @@ class UserKeyCreateRequest(BaseModel):
     generation_limit: int = -1
     daily_generation_limit: int = -1
     expires_in_days: int = 0
+    count: int = Field(default=1, ge=1, le=100)
 
 
 class UserKeyUpdateRequest(BaseModel):
@@ -184,16 +185,24 @@ def create_router() -> APIRouter:
     async def create_user_key(body: UserKeyCreateRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         try:
-            item, raw_key = auth_service.create_key(
+            created = auth_service.create_keys(
                 role="user",
                 name=body.name,
+                count=body.count,
                 generation_limit=body.generation_limit,
                 daily_generation_limit=body.daily_generation_limit,
                 expires_in_days=body.expires_in_days,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
-        return {"item": _with_daily_usage(item), "key": raw_key, "items": _with_daily_usage_list(auth_service.list_keys(role="user"))}
+        created_items = [{"item": _with_daily_usage(item), "key": raw_key} for item, raw_key in created]
+        first = created_items[0]
+        return {
+            "item": first["item"],
+            "key": first["key"],
+            "keys": created_items,
+            "items": _with_daily_usage_list(auth_service.list_keys(role="user")),
+        }
 
     @router.post("/api/auth/users/{key_id}")
     async def update_user_key(

@@ -291,6 +291,56 @@ class AuthService:
             self._save()
             return self._public_item(item), raw_key
 
+    def create_keys(
+        self,
+        *,
+        role: AuthRole,
+        name: str = "",
+        count: int = 1,
+        generation_limit: int = UNLIMITED_GENERATION_LIMIT,
+        daily_generation_limit: int = UNLIMITED_GENERATION_LIMIT,
+        expires_in_days: int = 0,
+    ) -> list[tuple[dict[str, object], str]]:
+        count = max(1, min(100, int(count or 1)))
+        with self._lock:
+            self._reload_locked()
+            created: list[tuple[dict[str, object], str]] = []
+            base_name = self._clean(name)
+            for index in range(1, count + 1):
+                raw_name = f"{base_name} {index}" if base_name and count > 1 else base_name
+                if raw_name:
+                    normalized_name = raw_name
+                    suffix = 2
+                    while self._has_name_locked(normalized_name, role=role):
+                        normalized_name = f"{raw_name} {suffix}"
+                        suffix += 1
+                else:
+                    normalized_name = self._build_default_name_locked(role)
+                while True:
+                    raw_key = f"sk-{secrets.token_urlsafe(24)}"
+                    try:
+                        key_hash = self._build_key_hash_locked(raw_key)
+                        break
+                    except ValueError:
+                        continue
+                item = {
+                    "id": uuid.uuid4().hex[:12],
+                    "name": normalized_name,
+                    "role": role,
+                    "key_hash": key_hash,
+                    "enabled": True,
+                    "created_at": _now_iso(),
+                    "last_used_at": None,
+                    "expires_at": self._expires_at_from_days(expires_in_days),
+                    "generation_limit": self._normalize_generation_limit(generation_limit),
+                    "generation_used": 0,
+                    "daily_generation_limit": self._normalize_daily_generation_limit(daily_generation_limit),
+                }
+                self._items.append(item)
+                created.append((self._public_item(item), raw_key))
+            self._save()
+            return created
+
     def update_key(
         self,
         key_id: str,

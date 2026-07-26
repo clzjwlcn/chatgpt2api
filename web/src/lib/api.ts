@@ -770,14 +770,20 @@ export async function fetchUserKeys() {
   return httpRequest<{ items: UserKey[] }>("/api/auth/users");
 }
 
-export async function createUserKey(name: string, generationLimit = -1, expiresInDays = 0, dailyGenerationLimit = -1) {
-  return httpRequest<{ item: UserKey; key: string; items: UserKey[] }>("/api/auth/users", {
+export type CreatedUserKey = {
+  item: UserKey;
+  key: string;
+};
+
+export async function createUserKey(name: string, generationLimit = -1, expiresInDays = 0, dailyGenerationLimit = -1, count = 1) {
+  return httpRequest<{ item: UserKey; key: string; keys?: CreatedUserKey[]; items: UserKey[] }>("/api/auth/users", {
     method: "POST",
     body: {
       name,
       generation_limit: generationLimit,
       expires_in_days: expiresInDays,
       daily_generation_limit: dailyGenerationLimit,
+      count,
     },
   });
 }
